@@ -1,0 +1,5 @@
+# 浏览器兼容目标：iOS 13.1 (Safari 13.1) 及以上
+# 该文件同时被 Babel / Autoprefixer / PostCSS 读取，
+# 修改此处即可统一调整整个项目的降级基线。
+ios_saf >= 13.1
+safari >= 13.1

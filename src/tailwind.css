@@ -1,0 +1,54 @@
+/*
+ * Tailwind 入口文件
+ *
+ * 原先项目在 HTML 中通过 `libs/tailwindcss.min.js`（Play CDN）在浏览器端
+ * 实时编译，在 iOS 13.1 的旧 WebKit 上开销大且易出错。
+ * 现在改为构建期预编译，产物输出到 dist/css/tailwind.css。
+ */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* =================================================================
+ * iOS 13.1 / Safari 13.1 兼容降级（工具类部分）
+ *
+ * 这里只处理 Tailwind 自己生成的工具类；业务样式（.shortcut-hint 等）
+ * 的降级集中在 css/legacy-ios13.css。
+ * ================================================================= */
+
+/* Safari 13.1 不支持 `inset` 简写（14.1 起才支持）。
+ * 项目里 modal / 遮罩大量使用 `fixed inset-0`、`absolute inset-0`，
+ * 必须在旧版 WebKit 上展开为物理方向属性。 */
+.inset-0 {
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+}
+
+/* Flexbox `gap` 同样从 Safari 14.1 起才生效。
+ * 探针刻意使用 `inset`：它与 Flex gap 属于同一个支持版本，
+ * 若用 `@supports (gap: 1rem)` 会在 Safari 13.1~14.0 上误判为“支持”。
+ * 项目实际只在 flex 容器上用到 gap-1 / gap-2（其余 gap-* 均用于 grid）。 */
+@supports not (inset: 0) {
+  .flex.gap-1 > * + * {
+    margin-left: 0.25rem;
+  }
+
+  .flex.gap-2 > * + * {
+    margin-left: 0.5rem;
+  }
+}
+
+/* `aspect-ratio` 自 Safari 15 起才支持。
+ * 项目通过 `aspect-[2/3]` 控制豆瓣 / 资源卡片的海报容器（宽:高 = 2:3），
+ * 内部图片是绝对定位并铺满容器，一旦 aspect-ratio 失效高度就会塔陷为 0，
+ * 海报将完全不显示，因此必须降级。 */
+@supports not (aspect-ratio: 2 / 3) {
+  .aspect-\[2\/3\]::before {
+    content: '';
+    display: block;
+    /* 高 = 宽 × 3/2，padding-top 的百分比基于容器宽度 */
+    padding-top: 150%;
+  }
+}

@@ -3,6 +3,6 @@ services:
     name: libretv
     runtime: node
     plan: free
-    buildCommand: 'npm install'
+    buildCommand: 'npm install && npm run build'
     startCommand: 'node server.mjs'
     autoDeploy: true 

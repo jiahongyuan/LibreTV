@@ -12,6 +12,16 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+/**
+ * 静态资源根目录：
+ * 优先使用构建产物 dist/（面向 iOS 13.1 / Safari 13.1 的降级版本），
+ * 若尚未构建则回退到源码目录，保证 `node server.mjs` 仍可直接启动。
+ * 正式部署前请先执行 `npm run build`。
+ */
+const staticRoot = fs.existsSync(path.join(__dirname, 'dist', 'index.html'))
+  ? path.join(__dirname, 'dist')
+  : __dirname;
+
 const config = {
   port: process.env.PORT || 8080,
   password: process.env.PASSWORD || '',
@@ -68,10 +78,10 @@ app.get(['/', '/index.html', '/player.html'], async (req, res) => {
     let filePath;
     switch (req.path) {
       case '/player.html':
-        filePath = path.join(__dirname, 'player.html');
+        filePath = path.join(staticRoot, 'player.html');
         break;
       default: // '/' 和 '/index.html'
-        filePath = path.join(__dirname, 'index.html');
+        filePath = path.join(staticRoot, 'index.html');
         break;
     }
     
@@ -85,7 +95,7 @@ app.get(['/', '/index.html', '/player.html'], async (req, res) => {
 
 app.get('/s=:keyword', async (req, res) => {
   try {
-    const filePath = path.join(__dirname, 'index.html');
+    const filePath = path.join(staticRoot, 'index.html');
     const content = await renderPage(filePath, config.password);
     res.send(content);
   } catch (error) {
@@ -222,7 +232,7 @@ app.get('/proxy/:encodedUrl', async (req, res) => {
   }
 });
 
-app.use(express.static(path.join(__dirname), {
+app.use(express.static(staticRoot, {
   maxAge: config.cacheMaxAge
 }));
 

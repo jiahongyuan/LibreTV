@@ -479,6 +479,31 @@ function initPlayer(videoUrl) {
                         currentHls.destroy();
                     } catch (e) {
                     }
+                    currentHls = null;
+                }
+
+                // iOS 13.1（尤其 iPhone）的 Safari 不支持 MSE，hls.js 在该环境下
+                // 完全无法工作；但 Safari 自带原生 HLS 能力，所以这里做原生回退：
+                //   - iPhone / 旧款 iPad：Hls.isSupported() === false → 交由原生播放
+                //   - 桌面 Chrome / Firefox / 新版 Safari：保持原有 hls.js 逻辑
+                const nativeHlsType = video.canPlayType('application/vnd.apple.mpegurl');
+                if (!Hls.isSupported() && nativeHlsType) {
+                    video.src = url;
+                    video.addEventListener('loadedmetadata', function () {
+                        const loading = document.getElementById('player-loading');
+                        if (loading) loading.style.display = 'none';
+                        video.play().catch(function () {});
+                    });
+                    video.addEventListener('error', function () {
+                        const loading = document.getElementById('player-loading');
+                        const errorBox = document.getElementById('error');
+                        if (loading) loading.style.display = 'none';
+                        if (errorBox) {
+                            errorBox.style.display = 'block';
+                            errorBox.textContent = '当前浏览器无法播放该视频源';
+                        }
+                    });
+                    return;
                 }
 
                 // 创建新的HLS实例

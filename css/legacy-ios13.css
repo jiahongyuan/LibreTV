@@ -1,0 +1,101 @@
+/*
+ * iOS 13.1 / Safari 13.1 兼容降级样式
+ * =================================================================
+ * 目标浏览器：iOS 13.1 ~ 14.0 的 Safari（WebKit）
+ *
+ * 为什么需要这个文件：
+ *   Babel / Autoprefixer 只能处理「语法」与「厂商前缀」，
+ *   而下面这些是**属性级**的能力缺失，必须显式降级：
+ *     - `inset` 简写            → Safari 14.1
+ *     - Flexbox `gap`           → Safari 14.1
+ *     - `aspect-ratio`          → Safari 15
+ *
+ * 特性探针统一使用 `@supports not (inset: 0)`：
+ *   `inset` 与 Flex gap 在同一个版本（14.1）被支持，
+ *   若改用 `@supports not (gap: 1rem)` 会在 13.1~14.0 上误判（因为
+ *   这些版本已支持 Grid gap，`gap` 属性可解析），导致降级规则不生效。
+ * =================================================================
+ */
+
+/* -----------------------------------------------------------------
+ * 1. Flexbox gap 降级
+ *    采用「相邻兄弟元素加外边距」的经典做法。
+ *    已知局限：flex-wrap 换行后，每行首个元素也会带上左边距，
+ *    视觉上是轻微缩进；对当前布局可接受。
+ * ----------------------------------------------------------------- */
+@supports not (inset: 0) {
+    /* css/index.css —— gap: 0.25rem */
+    .douban-refresh-button > * + * {
+        margin-left: 0.25rem;
+    }
+
+    /* css/index.css —— gap: 0.5rem */
+    .douban-tags > * + * {
+        margin-left: 0.5rem;
+    }
+
+    /* css/modals.css —— gap: 1rem */
+    .loading-content > * + * {
+        margin-left: 1rem;
+    }
+
+    /* css/modals.css —— gap: 2px */
+    .speed-indicator > * + * {
+        margin-left: 2px;
+    }
+
+    /* css/player.css —— gap: 0.5rem */
+    .shortcut-hint > * + * {
+        margin-left: 0.5rem;
+    }
+
+    /* css/player.css —— gap: 6px */
+    .resource-switch-btn > * + * {
+        margin-left: 6px;
+    }
+
+    /* css/styles.css —— gap: 0.5rem */
+    .player-header > * + * {
+        margin-left: 0.5rem;
+    }
+
+    /* css/styles.css —— gap: 0.5rem */
+    #modal .detail-item > * + * {
+        margin-left: 0.5rem;
+    }
+
+    /* css/styles.css —— gap: 0.5rem */
+    #modal .episode-stats > * + * {
+        margin-left: 0.5rem;
+    }
+}
+
+/* -----------------------------------------------------------------
+ * 2. inset 简写降级
+ *    仅保留被 inset 影响的两个全屏遮罩层；`inset` 在旧 WebKit 上
+ *    会被整条丢弃，导致遮罩无法铺满视口。
+ * ----------------------------------------------------------------- */
+@supports not (inset: 0) {
+    .modal-overlay,
+    .loading-overlay {
+        top: 0;
+        right: 0;
+        bottom: 0;
+        left: 0;
+    }
+}
+
+/* -----------------------------------------------------------------
+ * 3. aspect-ratio 降级
+ *    .player-placeholder 用 16:9 占位防止画面加载时抖动。
+ *    旧 WebKit 忽略 aspect-ratio 且 height:auto，高度会塌陷为 0，
+ *    这里用伪元素的 padding-top 撑出同样的比例。
+ * ----------------------------------------------------------------- */
+@supports not (aspect-ratio: 16 / 9) {
+    .player-placeholder::before {
+        content: '';
+        display: block;
+        /* 9 / 16 = 56.25% */
+        padding-top: 56.25%;
+    }
+}

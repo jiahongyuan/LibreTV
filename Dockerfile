@@ -17,11 +17,14 @@ WORKDIR /app
 # 复制 package.json 和 package-lock.json（如果存在）
 COPY package*.json ./
 
-# 安装依赖
-RUN npm ci --only=production && npm cache clean --force
+# 安装全部依赖：构建阶段需要 Tailwind / PostCSS / Babel 等 devDependencies
+RUN npm ci && npm cache clean --force
 
 # 复制应用文件
 COPY . .
+
+# 生成面向 iOS 13.1 / Safari 13.1 的构建产物，并剔除仅构建期依赖
+RUN npm run build && npm prune --omit=dev
 
 # 暴露端口
 EXPOSE 8080

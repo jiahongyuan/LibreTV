@@ -11,10 +11,13 @@
     <link rel="apple-touch-icon" href="image/logo-black.png">
     <link rel="manifest" href="manifest.json">
 
-    <script src="libs/tailwindcss.min.js"></script>
     <script src="js/version-check.js"></script>
     <link rel="stylesheet" href="css/styles.css">
     <link rel="stylesheet" href="css/player.css">
+    <!-- Tailwind 预编译产物（替代原 Play CDN 运行时编译，降低 iOS 13.1 上的运行时开销） -->
+    <link rel="stylesheet" href="css/tailwind.css">
+    <!-- iOS 13.1 / Safari 13.1 兼容降级 -->
+    <link rel="stylesheet" href="css/legacy-ios13.css">
     
     <meta http-equiv="Cache-Control" content="no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">

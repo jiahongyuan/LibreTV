@@ -53,8 +53,9 @@ Pull Bot 会反复触发无效的 PR 和垃圾邮件，严重干扰项目维护�
 2. 登录 [Cloudflare Dashboard](https://dash.cloudflare.com/)，进入 Pages 服务
 3. 点击"创建项目"，连接您的 GitHub 仓库
 4. 使用以下设置：
-   - 构建命令：留空（无需构建）
-   - 输出目录：留空（默认为根目录）
+   - 构建命令：`npm run build`
+   - 输出目录：`dist`
+   - 根目录：留空（默认为仓库根目录，`functions/` 目录需保持在根目录）
 5. **⚠️ 重要：在"设置" > "环境变量"中添加 `PASSWORD` 变量（必须设置）**
 6. 点击"保存并部署"
 
@@ -62,7 +63,7 @@ Pull Bot 会反复触发无效的 PR 和垃圾邮件，严重干扰项目维护�
 
 1. Fork 或克隆本仓库到您的 GitHub/GitLab 账户
 2. 登录 [Vercel](https://vercel.com/)，点击"New Project"
-3. 导入您的仓库，使用默认设置
+3. 导入您的仓库（`vercel.json` 已配置构建命令 `npm run build` 与输出目录 `dist`，保持默认设置即可）
 4. **⚠️ 重要：在"Settings" > "Environment Variables"中添加 `PASSWORD` 变量（必须设置）**
 5. 点击"Deploy"
 
@@ -110,11 +111,28 @@ cp .env.example .env
 # 安装依赖
 npm install
 
-# 启动开发服务器
+# 启动开发服务器（会自动先执行构建，再启动服务）
 npm run dev
 ```
 
 访问 `http://localhost:8080` 即可使用（端口可在.env文件中通过PORT变量修改）。
+
+#### 关于构建（iOS 13.1 / Safari 13.1 兼容）
+
+项目通过构建管线将现代语法与样式降级到 **Safari 13.1** 基线，产物统一输出到 `dist/`：
+
+```bash
+npm run build     # 生成 dist/：预编译 Tailwind、降级 JS 语法、补齐 CSS 前缀
+npm start         # 启动服务（若存在 dist/ 则优先使用）
+```
+
+- `npm run build` 先编译 `css/tailwind.css`，再将 `js/*.js` 经 Babel 语法降级、`css/*.css` 经 PostCSS 补前缀，并复制静态资源到 `dist/`。
+- `server.mjs` 会自动探测：存在 `dist/index.html` 时使用 `dist/`，否则回退到项目根目录。
+- 兼容基线统一在 `.browserslistrc` 中定义，调整该文件即可改变整个项目的降级目标（例如放宽到 `ios_saf >= 14.5`）。
+- 构建结束会输出**兼容性自检报告**（列出检出的不兼容特性及其是否已被降级层覆盖）与**产物语法校验**结果。
+- `css/legacy-ios13.css` 是旧版浏览器的属性级降级层（Flex gap / `inset` / `aspect-ratio`），由 `@supports` 条件包裹，新浏览器会直接跳过。
+
+> 说明：构建产物 `dist/` 已在 `.gitignore` 中忽略，无需提交。
 
 > ⚠️ 注意：使用简单静态服务器（如 `python -m http.server` 或 `npx http-server`）时，视频代理功能将不可用，视频无法正常播放。完整功能测试请使用 Node.js 开发服务器。
 

@@ -1,14 +1,28 @@
 services:
   libretv:
-    image: bestzwei/libretv:latest
+    # ── 镜像来源二选一 ────────────────────────────────────────────────────
+    # ① 推荐：从当前源码构建。会执行 Dockerfile 中的 npm run build，
+    #    产出面向 iOS 13.1 / Safari 13.1 的 dist/ 兼容版本。
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: libretv:local
+
+    # ② 使用官方镜像：删除上面的 build 与 image 两段，改用下面一行。
+    #    注意：官方镜像不含本仓库的 iOS 13.1 兼容改动。
+    # image: bestzwei/libretv:latest
+    # ─────────────────────────────────────────────────────────────────────
+
     container_name: libretv
     ports:
-      - "8899:8080" # 将内部 8080 端口映射到主机的 8899 端口
+      - "8899:8080" # 左侧为主机端口，可按需修改；右侧 8080 是容器内端口，勿改
     environment:
-      - PASSWORD=${PASSWORD:-your_password} # 可将 your_password 修改为你想要的密码，默认为 your_password
+      - PASSWORD=${PASSWORD:-your_password} # ⚠️ 务必修改；建议改用同目录 .env 文件
+      # - CORS_ORIGIN=https://tv.example.com # 绑定自有域名时建议收紧为具体域名
+      # - DEBUG=false
+    restart: unless-stopped
 #    volumes:
 #      - libretv_data:/app # 不要修改
-    restart: unless-stopped
 
 #volumes:
 #  libretv_data:

@@ -4,8 +4,11 @@
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
 	<title>关于我们 - LibreTV</title>
-	<script src="libs/tailwindcss.min.js"></script>
 	<link rel="stylesheet" href="css/styles.css">
+	<!-- Tailwind 预编译产物（替代原 Play CDN 运行时编译，降低 iOS 13.1 上的运行时开销） -->
+	<link rel="stylesheet" href="css/tailwind.css">
+	<!-- iOS 13.1 / Safari 13.1 兼容降级 -->
+	<link rel="stylesheet" href="css/legacy-ios13.css">
 	<link rel="manifest" href="manifest.json">
 	
 	<!-- Favicon -->
