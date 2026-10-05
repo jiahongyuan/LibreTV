@@ -246,6 +246,22 @@ export async function onRequest(context) {
         return `/proxy/${encodeURIComponent(targetUrl)}`;
     }
 
+    // 计算上游请求应使用的 Referer
+    // 豆瓣图床（img*.doubanio.com 等）有防盗链：不带 Referer → 418，带非豆瓣站点 Referer → 403，
+    // 只有 https://movie.douban.com/ 才会放行。前端 <img> 无法自带 Referer，必须由代理补上。
+    function getUpstreamReferer(targetUrl) {
+        try {
+            const host = new URL(targetUrl).hostname;
+            if (/(^|\.)(doubanio\.com|douban\.com|doubanusercontent\.com)$/i.test(host)) {
+                return 'https://movie.douban.com/';
+            }
+        } catch (e) {
+            // 非法 URL，忽略，走下面的默认逻辑
+        }
+        // 默认：传递原始 Referer，没有则用目标站点 origin
+        return request.headers.get('Referer') || new URL(targetUrl).origin;
+    }
+
     // 获取远程内容及其类型
     async function fetchContentWithType(targetUrl) {
         const headers = new Headers({
@@ -253,8 +269,8 @@ export async function onRequest(context) {
             'Accept': '*/*',
             // 尝试传递一些原始请求的头信息
             'Accept-Language': request.headers.get('Accept-Language') || 'zh-CN,zh;q=0.9,en;q=0.8',
-            // 尝试设置 Referer 为目标网站的域名，或者传递原始 Referer
-            'Referer': request.headers.get('Referer') || new URL(targetUrl).origin
+            // Referer：豆瓣等有防盗链的站点需要固定的 Referer
+            'Referer': getUpstreamReferer(targetUrl)
         });
 
         try {
@@ -269,11 +285,14 @@ export async function onRequest(context) {
                  throw new Error(`HTTP error ${response.status}: ${response.statusText}. URL: ${targetUrl}. Body: ${errorBody.substring(0, 150)}`);
             }
 
-            // 读取响应内容为文本
-            const content = await response.text();
+            // 读取响应内容：图片/音视频等二进制内容必须按字节透传，
+            // 用 text() 读取会按 UTF-8 解码并替换非法字节，导致封面等文件损坏。
             const contentType = response.headers.get('Content-Type') || '';
-            logDebug(`请求成功: ${targetUrl}, Content-Type: ${contentType}, 内容长度: ${content.length}`);
-            return { content, contentType, responseHeaders: response.headers }; // 同时返回原始响应头
+            const isBinary = /^(image|audio|video)\//i.test(contentType)
+                || /application\/octet-stream/i.test(contentType);
+            const content = isBinary ? await response.arrayBuffer() : await response.text();
+            logDebug(`请求成功: ${targetUrl}, Content-Type: ${contentType}${isBinary ? '（二进制透传）' : ''}`);
+            return { content, contentType, isBinary, responseHeaders: response.headers }; // 同时返回原始响应头
 
         } catch (error) {
              logDebug(`请求彻底失败: ${targetUrl}: ${error.message}`);
@@ -539,10 +558,11 @@ export async function onRequest(context) {
         }
 
         // --- 实际请求 ---
-        const { content, contentType, responseHeaders } = await fetchContentWithType(targetUrl);
+        const { content, contentType, isBinary, responseHeaders } = await fetchContentWithType(targetUrl);
 
         // --- 写入缓存 (KV) ---
-        if (kvNamespace) {
+        // 二进制内容（图片等）不写入 KV：一是 JSON 序列化会破坏字节，二是体积大且无必要
+        if (kvNamespace && !isBinary) {
              try {
                  const headersToCache = {};
                  responseHeaders.forEach((value, key) => { headersToCache[key.toLowerCase()] = value; });

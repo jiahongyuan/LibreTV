@@ -62,6 +62,22 @@ function sha256Hash(input) {
   });
 }
 
+/**
+ * 给 HTML 里的本地 js/css 引用追加基于文件 mtime 的版本号。
+ * express.static 对 js/css 用的是 CACHE_MAX_AGE（默认 1d），
+ * 若不加版本号，部署新代码后浏览器仍会跑缓存里的旧脚本。
+ */
+function versionLocalAssets(html) {
+  return html.replace(/(href|src)="((?:js|css)\/[^"?]+)"/g, (match, attr, rel) => {
+    try {
+      const stat = fs.statSync(path.join(staticRoot, rel));
+      return `${attr}="${rel}?v=${Math.floor(stat.mtimeMs).toString(36)}"`;
+    } catch {
+      return match;
+    }
+  });
+}
+
 async function renderPage(filePath, password) {
   let content = fs.readFileSync(filePath, 'utf8');
   if (password !== '') {
@@ -70,7 +86,9 @@ async function renderPage(filePath, password) {
   } else {
     content = content.replace('{{PASSWORD}}', '');
   }
-  return content;
+  // HTML 本身必须每次校验（见下方 Cache-Control: no-cache），
+  // 而它引用的 js/css 用版本号强制刷新
+  return versionLocalAssets(content);
 }
 
 app.get(['/', '/index.html', '/player.html'], async (req, res) => {
@@ -86,6 +104,9 @@ app.get(['/', '/index.html', '/player.html'], async (req, res) => {
     }
     
     const content = await renderPage(filePath, config.password);
+    // HTML 每次都回源校验（ETag 命中时仍是 304，开销极小），
+    // 否则浏览器会用缓存里的 HTML 继续引用旧版本的 js/css
+    res.setHeader('Cache-Control', 'no-cache');
     res.send(content);
   } catch (error) {
     console.error('页面渲染错误:', error);
@@ -97,6 +118,9 @@ app.get('/s=:keyword', async (req, res) => {
   try {
     const filePath = path.join(staticRoot, 'index.html');
     const content = await renderPage(filePath, config.password);
+    // HTML 每次都回源校验（ETag 命中时仍是 304，开销极小），
+    // 否则浏览器会用缓存里的 HTML 继续引用旧版本的 js/css
+    res.setHeader('Cache-Control', 'no-cache');
     res.send(content);
   } catch (error) {
     console.error('搜索页面渲染错误:', error);
@@ -126,6 +150,28 @@ function isValidUrl(urlString) {
   } catch {
     return false;
   }
+}
+
+// 豆瓣图床（img*.doubanio.com / *.douban.com）有防盗链：
+//   - 不带 Referer            → HTTP 418
+//   - 带非豆瓣站点的 Referer  → HTTP 403
+//   - Referer = https://movie.douban.com/ → HTTP 200
+// 浏览器无法为 <img> 指定 Referer，必须由代理代劳。
+function isDoubanHost(hostname) {
+  return /(^|\.)(doubanio\.com|douban\.com|doubanusercontent\.com)$/i.test(hostname || '');
+}
+
+function buildUpstreamHeaders(targetUrl) {
+  const headers = { 'User-Agent': config.userAgent };
+  try {
+    const { hostname } = new URL(targetUrl);
+    if (isDoubanHost(hostname)) {
+      headers['Referer'] = 'https://movie.douban.com/';
+    }
+  } catch {
+    // 非法 URL 交给后续校验处理
+  }
+  return headers;
 }
 
 // 验证代理请求的鉴权
@@ -162,6 +208,18 @@ function validateProxyAuth(req) {
   return true;
 }
 
+// 代理访问日志：只记一行，用于定位「某台设备/某几张封面为什么不出来」。
+// 日志里能看出：请求的目标 URL、返回状态码、客户端 UA。
+// 注意：不要把 auth/t 参数写进日志。
+app.use('/proxy', (req, res, next) => {
+  const target = decodeURIComponent((req.url || '').split('?')[0].replace(/^\/proxy\//, '')).slice(0, 110);
+  const ua = (req.headers['user-agent'] || '').slice(0, 48);
+  res.on('finish', () => {
+    console.log(`[proxy] ${res.statusCode} ${target} | ua=${ua}`);
+  });
+  next();
+});
+
 app.get('/proxy/:encodedUrl', async (req, res) => {
   try {
     // 验证鉴权
@@ -193,9 +251,7 @@ app.get('/proxy/:encodedUrl', async (req, res) => {
           url: targetUrl,
           responseType: 'stream',
           timeout: config.timeout,
-          headers: {
-            'User-Agent': config.userAgent
-          }
+          headers: buildUpstreamHeaders(targetUrl)
         });
       } catch (error) {
         if (retries < maxRetries) {
@@ -233,7 +289,16 @@ app.get('/proxy/:encodedUrl', async (req, res) => {
 });
 
 app.use(express.static(staticRoot, {
-  maxAge: config.cacheMaxAge
+  maxAge: config.cacheMaxAge,
+  setHeaders: (res, filePath) => {
+    // js/css 一律每次回源校验（命中 ETag 就是 304，开销极小）。
+    // 原因：客户端可能还缓存着「不带 ?v= 版本号」的旧 HTML，
+    // 它会请求 /js/douban.js 这种无版本号地址；若这里按 CACHE_MAX_AGE 缓存一天，
+    // 部署新代码后那台客户端会一直跑旧脚本（实测事故：封面又全部不显示）。
+    if (/\.(?:js|css)$/i.test(filePath)) {
+      res.setHeader('Cache-Control', 'no-cache');
+    }
+  }
 }));
 
 app.use((err, req, res, next) => {

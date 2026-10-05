@@ -213,6 +213,10 @@ button, .card-hover {
     margin-top: auto;
     background: linear-gradient(to bottom, transparent, var(--page-gradient-start));
     border-top: 1px solid var(--border-color);
+    /* 海报卡片带 transform，绘制层级高于普通流内容；
+       显式提层，保证页脚永远压在海报层之上（弹窗为 fixed z-40/65，仍在页脚之上） */
+    position: relative;
+    z-index: 20;
 }
 
 .footer a:hover {

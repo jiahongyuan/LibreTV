@@ -47,6 +47,22 @@ body, html {
     overflow: hidden !important;
 }
 
+/* 旧 WebKit（iOS 13.1~14，无 aspect-ratio）下，占位框的高度由
+ * css/legacy-ios13.css 里 .player-placeholder::before 的 padding-top:56.25% 撑出。
+ * 此时 artplayer 的根节点若留在普通流里，它的 height:100% 会退化成 auto，
+ * 只剩 min-height:150px，并被排在占位块下面 ——
+ * 表现就是「未全屏时视频跟播放框大小对不上」（视频挤在 16:9 空框下方一条）。
+ * 让它绝对定位铺满占位框即可；全屏 / 网页全屏状态除外，交给 artplayer 自己处理。 */
+@supports not (aspect-ratio: 16 / 9) {
+    .player-placeholder > .art-video-player:not(.art-fullscreen):not(.art-fullscreen-web) {
+        position: absolute !important;
+        top: 0 !important;
+        left: 0 !important;
+        width: 100% !important;
+        height: 100% !important;
+    }
+}
+
 .player-loading-container {
     width: 100% !important;
     height: 0 !important;

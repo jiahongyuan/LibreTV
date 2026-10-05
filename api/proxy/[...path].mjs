@@ -136,14 +136,29 @@ function getRandomUserAgent() {
     return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
 }
 
+// 计算上游请求应使用的 Referer。
+// 豆瓣图床（img*.doubanio.com 等）有防盗链：不带 Referer → 418，带非豆瓣站点 Referer → 403，
+// 只有 https://movie.douban.com/ 才放行；前端 <img> 无法自带 Referer，必须由代理补上。
+function getUpstreamReferer(targetUrl, requestHeaders) {
+    try {
+        const host = new URL(targetUrl).hostname;
+        if (/(^|\.)(doubanio\.com|douban\.com|doubanusercontent\.com)$/i.test(host)) {
+            return 'https://movie.douban.com/';
+        }
+    } catch (e) {
+        // 非法 URL，忽略
+    }
+    return requestHeaders['referer'] || new URL(targetUrl).origin;
+}
+
 async function fetchContentWithType(targetUrl, requestHeaders) {
     // 准备请求头
     const headers = {
         'User-Agent': getRandomUserAgent(),
         'Accept': requestHeaders['accept'] || '*/*', // 传递原始 Accept 头（如果有）
         'Accept-Language': requestHeaders['accept-language'] || 'zh-CN,zh;q=0.9,en;q=0.8',
-        // 尝试设置一个合理的 Referer
-        'Referer': requestHeaders['referer'] || new URL(targetUrl).origin,
+        // 有防盗链的站点（豆瓣）使用固定 Referer，其余沿用原始 Referer
+        'Referer': getUpstreamReferer(targetUrl, requestHeaders),
     };
     // 清理空值的头
     Object.keys(headers).forEach(key => headers[key] === undefined || headers[key] === null || headers[key] === '' ? delete headers[key] : {});
@@ -164,12 +179,15 @@ async function fetchContentWithType(targetUrl, requestHeaders) {
             throw err; // 抛出错误
         }
 
-        // 读取响应内容
-        const content = await response.text();
+        // 读取响应内容：图片/音视频等二进制内容必须按字节透传，
+        // 用 text() 读取会按 UTF-8 解码并替换非法字节，导致封面等文件损坏。
         const contentType = response.headers.get('content-type') || '';
-        logDebug(`请求成功: ${targetUrl}, Content-Type: ${contentType}, 内容长度: ${content.length}`);
+        const isBinary = /^(image|audio|video)\//i.test(contentType)
+            || /application\/octet-stream/i.test(contentType);
+        const content = isBinary ? await response.buffer() : await response.text();
+        logDebug(`请求成功: ${targetUrl}, Content-Type: ${contentType}${isBinary ? '（二进制透传）' : ''}`);
         // 返回结果
-        return { content, contentType, responseHeaders: response.headers };
+        return { content, contentType, isBinary, responseHeaders: response.headers };
 
     } catch (error) {
         // 捕获 fetch 本身的错误（网络、超时等）或上面抛出的 HTTP 错误
