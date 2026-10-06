@@ -1,7 +1,7 @@
 // ⚠️ 本文件由 scripts/fetch-sources.mjs 自动生成，请勿手工修改。
 // 重新生成：npm run sources
 // 订阅来源：https://raw.githubusercontent.com/hafrey1/LunaTV-config/refs/heads/main/jin18.txt
-// 生成时间：2026-10-06T11:09:51.435Z（共 28 个源）
+// 生成时间：2026-10-06T11:19:43.745Z（共 28 个源）
 
 const CUSTOMER_SITES = {
     iqiyizyapi_com: {

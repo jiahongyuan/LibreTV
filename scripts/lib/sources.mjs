@@ -17,9 +17,21 @@ export function base58Decode(str) {
   }
   let hex = n.toString(16);
   if (hex.length % 2) hex = '0' + hex;
-  const body = Buffer.from(hex, 'hex');
+  const body = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < body.length; i++) body[i] = parseInt(hex.substr(i * 2, 2), 16);
   const leading = String(str).length - String(str).replace(/^1+/, '').length;
-  return Buffer.concat([Buffer.alloc(leading), body]);
+  if (!leading) return body;
+  const out = new Uint8Array(leading + body.length);
+  out.set(body, leading);
+  return out;
+}
+
+/** 解出订阅的 JSON 文本（Node 与 Cloudflare Workers 通用） */
+export function decodeSubscriptionText(raw) {
+  const text = String(raw).trim();
+  if (!text) throw new Error('订阅内容为空');
+  if (text.startsWith('{')) return text;
+  return new TextDecoder().decode(base58Decode(text));
 }
 
 /**
@@ -54,15 +66,7 @@ export function keyOf(host, used = new Set()) {
 export function normalizeSubscription(input) {
   let payload = input;
   if (typeof input === 'string') {
-    const text = input.trim();
-    if (!text) throw new Error('订阅内容为空');
-    let decoded;
-    if (text.startsWith('{')) {
-      decoded = text; // 已经是 JSON
-    } else {
-      decoded = base58Decode(text).toString('utf8');
-    }
-    payload = JSON.parse(decoded);
+    payload = JSON.parse(decodeSubscriptionText(input));
   }
 
   const apiSite = payload && payload.api_site;

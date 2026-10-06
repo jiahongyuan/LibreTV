@@ -1,6 +1,7 @@
 {
-  "updatedAt": "2026-10-06T11:09:51.435Z",
+  "updatedAt": "2026-10-06T11:19:43.745Z",
   "subscription": "https://raw.githubusercontent.com/hafrey1/LunaTV-config/refs/heads/main/jin18.txt",
+  "cacheTime": 7200,
   "count": 28,
   "sources": {
     "iqiyizyapi_com": {
