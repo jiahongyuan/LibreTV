@@ -7,8 +7,22 @@
 | `terminator.mjs` | :80 提供 ACME http-01 挑战文件 + 301 跳转；:443 TLS 终结并反代到 `libretv:8080`；每 5 分钟按 mtime 热加载证书 |
 | `Dockerfile` | `node:lts-alpine` 单文件镜像 |
 | `docker-compose.yml` | 容器 `libretv-tls`，发布 80/443，加入外部网络 `libretv_default` |
-| `renew.sh` | certbot（容器）webroot 续期，日志 `/var/log/libretv-cert-renew.log` |
+| `libretv-cert-renew.sh` | certbot（容器）webroot 续期，日志 `/var/log/libretv-cert-renew.log`；由 `sync.sh` 安装到 `/usr/local/sbin/libretv-cert-renew.sh` |
 | `libretv-cert-renew.{service,timer}` | systemd 定时器，每天 03/17 点跑一次续期 |
+| `sync.sh` | 单向同步：仓库 → amd02（含 md5 校验、装单元、重建容器） |
+
+## 仓库是唯一来源
+
+服务器上**不保留源码副本**：`/opt/libretv-tls` 只是本脚本生成的构建上下文，随时可以删掉/重建；
+续期脚本装在 `/usr/local/sbin/libretv-cert-renew.sh`（续期不依赖构建上下文）。
+改动流程固定为：**改仓库 → `./sync.sh`**。
+
+恢复（例如服务器上目录被误删、镜像被 prune）：
+
+```bash
+cd deploy/amd02-tls && ./sync.sh
+```
+
 
 ## 为什么是容器而不是 nginx/caddy
 
@@ -33,15 +47,13 @@ ACME 账号复用 arm-phoenix 的（`/etc/letsencrypt/accounts` 拷过来），�
 ## 部署 / 同步到 amd02
 
 ```bash
-tar czf - terminator.mjs Dockerfile docker-compose.yml renew.sh \
-  libretv-cert-renew.service libretv-cert-renew.timer \
-  | ssh amd02 'sudo -n tar xzf - -C /opt/libretv-tls'
-ssh amd02 'sudo -n cp /opt/libretv-tls/libretv-cert-renew.service \
-  /opt/libretv-tls/libretv-cert-renew.timer /etc/systemd/system/ && sudo -n systemctl daemon-reload'
-ssh amd02 'cd /opt/libretv-tls && sudo -n docker compose build && sudo -n docker compose up -d'
+cd deploy/amd02-tls && ./sync.sh          # HOST=amd02 REMOTE_DIR=/opt/libretv-tls
 ```
 
-改 `terminator.mjs` 后只需重建 `libretv-tls`，不影响 libretv 容器。
+脚本做的事：同步构建上下文 → 装 `/usr/local/sbin/libretv-cert-renew.sh` → 装 systemd 单元并
+`daemon-reload` + `enable --now` 定时器 → md5 逐个校验 → 重建并重启 `libretv-tls`。
+
+改 `terminator.mjs` 后只需重跑 `sync.sh`，不影响 libretv 容器。
 
 ## 自测
 

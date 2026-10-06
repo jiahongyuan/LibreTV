@@ -5,4 +5,4 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/opt/libretv-tls/renew.sh
+ExecStart=/usr/local/sbin/libretv-cert-renew.sh
