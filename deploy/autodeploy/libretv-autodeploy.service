@@ -1,0 +1,8 @@
+[Unit]
+Description=LibreTV 自动部署到 Cloudflare Pages（跟踪 GitHub main）
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/steve/libretv-autodeploy.sh
