@@ -1,4 +1,5 @@
 // functions/proxy/[[path]].js
+import { sessionFromRequest } from '../../lib/pages-session.mjs';
 
 // --- 配置 (现在从 Cloudflare 环境变量读取) ---
 // 在 Cloudflare Pages 设置 -> 函数 -> 环境变量绑定 中设置以下变量:
@@ -74,17 +75,28 @@ export async function onRequest(context) {
 
     // 验证代理请求的鉴权
     async function validateAuth(request, env) {
-        const url = new URL(request.url);
-        const authHash = url.searchParams.get('auth');
-        const timestamp = url.searchParams.get('t');
-        
-        // 获取服务器端密码
         const serverPassword = env.PASSWORD;
         if (!serverPassword) {
             console.error('服务器未设置 PASSWORD 环境变量，代理访问被拒绝');
             return false;
         }
-        
+
+        // ① 主路径：HttpOnly Cookie 里的会话令牌（POST /api/login 下发）。
+        //    令牌不进 URL，所以不会漏进历史 / 日志 / Referer / 边缘日志。
+        if (await sessionFromRequest(request, env)) {
+            return true;
+        }
+
+        // ② 兼容路径：?auth=<sha256(PASSWORD)>，需显式开启 ALLOW_URL_AUTH=true
+        if (env.ALLOW_URL_AUTH !== 'true') {
+            console.warn('代理请求鉴权失败：无有效会话');
+            return false;
+        }
+
+        const url = new URL(request.url);
+        const authHash = url.searchParams.get('auth');
+        const timestamp = url.searchParams.get('t');
+
         // 使用 SHA-256 哈希算法（与其他平台保持一致）
         // 在 Cloudflare Workers 中使用 crypto.subtle
         try {

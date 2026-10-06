@@ -269,22 +269,44 @@ function initPasswordProtection() {
         return;
     }
 
-    // 如果设置了密码但用户未验证，显示密码输入框
-    if (isPasswordProtected() && !isPasswordVerified()) {
-        showPasswordModal();
-        return;
-    }
+    if (!isPasswordProtected()) return;
 
-    // 本地标记说「已验证」，但真凭据在 HttpOnly Cookie 里 —— 再跟服务端确认一次。
-    // Cookie 过期 / 被清掉 / 换了设备时，清掉本地标记并重新弹窗。
-    if (isPasswordProtected()) {
+    // 本地标记说「已验证」：真凭据在 HttpOnly Cookie 里，再跟服务端确认一次。
+    // Cookie 过期 / 被清掉时，清掉本地标记并重新弹窗。
+    if (isPasswordVerified()) {
         checkServerSession().then(function (ok) {
             if (!ok) {
                 localStorage.removeItem(PASSWORD_CONFIG.localStorageKey);
                 showPasswordModal();
             }
         });
+        return;
     }
+
+    // 本地没有标记。iOS 的 ITP 会在 7 天无交互后清掉 localStorage，
+    // 但服务端下发的 HttpOnly Cookie 不受影响 —— 所以先问服务端还有没有有效会话，
+    // 有就补上本地标记、直接放行，不用再输一次密码。
+    if (!isCookieMode()) {
+        showPasswordModal();
+        return;
+    }
+    checkServerSession().then(function (ok) {
+        if (ok) {
+            localStorage.setItem(PASSWORD_CONFIG.localStorageKey, JSON.stringify({
+                verified: true,
+                timestamp: Date.now(),
+                mode: 'cookie'
+            }));
+            // 走一遍「验证成功」的收尾（显示豆瓣区并初始化），
+            // 否则首次加载时豆瓣区不会渲染。player.html 没有豆瓣区，跳过。
+            if (typeof hidePasswordModal === 'function' && document.getElementById('doubanArea')) {
+                hidePasswordModal();
+            }
+            console.log('[password] 检测到有效服务端会话，已跳过密码输入');
+        } else {
+            showPasswordModal();
+        }
+    });
 }
 
 /**
