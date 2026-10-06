@@ -1,5 +1,8 @@
 // 全局变量
-let selectedAPIs = JSON.parse(localStorage.getItem('selectedAPIs') || '["tyyszy","dyttzy", "bfzy", "ruyi"]'); // 默认选中资源
+// 默认勾选：由 scripts/fetch-sources.mjs 生成（订阅前若干个源）；下面的常量只是兜底
+const FALLBACK_SELECTED_APIS = ["iqiyizyapi_com", "dbzy_tv", "mtzy_me", "wolongzyw_com", "ikunzy_com", "dyttzyapi_com"];
+let selectedAPIs = JSON.parse(localStorage.getItem('selectedAPIs') || 'null') ||
+    (window.DEFAULT_SELECTED_APIS || FALLBACK_SELECTED_APIS).slice(); // 默认选中资源
 let customAPIs = JSON.parse(localStorage.getItem('customAPIs') || '[]'); // 存储自定义API列表
 
 // 添加当前播放的集数索引
@@ -27,8 +30,8 @@ document.addEventListener('DOMContentLoaded', function () {
 
     // 设置默认API选择（如果是第一次加载）
     if (!localStorage.getItem('hasInitializedDefaults')) {
-        // 默认选中资源
-        selectedAPIs = ["tyyszy", "bfzy", "dyttzy", "ruyi"];
+        // 默认选中资源（订阅前若干个）
+        selectedAPIs = (window.DEFAULT_SELECTED_APIS || FALLBACK_SELECTED_APIS).slice();
         localStorage.setItem('selectedAPIs', JSON.stringify(selectedAPIs));
 
         // 默认选中过滤开关

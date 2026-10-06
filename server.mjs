@@ -10,6 +10,7 @@ import net from 'net';
 import http from 'http';
 import https from 'https';
 import dotenv from 'dotenv';
+import { normalizeSubscription } from './scripts/lib/sources.mjs';
 
 dotenv.config();
 
@@ -359,6 +360,83 @@ app.get('/api/session', (req, res) => {
   res.json({ ok: !!sessionFromRequest(req) });
 });
 
+/**
+ * 内置源清单（订阅）
+ * ------------------------------------------------------------------
+ * 订阅是 Base58(JSON)，内容形如 { cache_time, api_site: { 主机: {name, api} } }。
+ * 由服务端统一拉取 + 解析 + 缓存（订阅里的 cache_time，默认 2 小时），
+ * 客户端只需请求本接口 —— 用户侧（尤其国内）不需要能访问 GitHub。
+ * 拉不到时依次回落到：上次成功的结果 → 仓库里的 data/sources.json。
+ */
+const SUBSCRIPTION_URL = process.env.SUBSCRIPTION_URL ||
+  'https://raw.githubusercontent.com/hafrey1/LunaTV-config/refs/heads/main/jin18.txt';
+const SUBSCRIPTION_TTL_MS = Math.max(300, Number(process.env.SUBSCRIPTION_TTL || 7200)) * 1000;
+const BUNDLED_SOURCES_FILE = path.join(__dirname, 'data', 'sources.json');
+
+let sourcesState = { at: 0, sources: null, origin: 'none' };
+
+async function fetchSubscriptionSources() {
+  const resp = await axios.get(SUBSCRIPTION_URL, {
+    timeout: 15000,
+    responseType: 'text',
+    transformResponse: [(d) => d],
+    headers: { 'User-Agent': config.userAgent }
+  });
+  const { sources } = normalizeSubscription(String(resp.data));
+  return sources;
+}
+
+async function loadBundledSources() {
+  try {
+    const raw = await fs.promises.readFile(BUNDLED_SOURCES_FILE, 'utf8');
+    const parsed = JSON.parse(raw);
+    return parsed && parsed.sources ? parsed.sources : null;
+  } catch (err) {
+    console.warn('读取内置源清单失败:', err.message);
+    return null;
+  }
+}
+
+async function getSources({ force = false } = {}) {
+  const isFresh = sourcesState.sources && (Date.now() - sourcesState.at) < SUBSCRIPTION_TTL_MS;
+  if (isFresh && !force) return { ...sourcesState, origin: 'cache' };
+
+  try {
+    const sources = await fetchSubscriptionSources();
+    sourcesState = { at: Date.now(), sources, origin: 'live' };
+    console.log(`[sources] 订阅已更新：${Object.keys(sources).length} 个源`);
+    return sourcesState;
+  } catch (err) {
+    console.error('[sources] 订阅更新失败:', err.message);
+    if (sourcesState.sources) return { ...sourcesState, origin: 'stale' };
+    const bundled = await loadBundledSources();
+    if (bundled) {
+      sourcesState = { at: 0, sources: bundled, origin: 'bundled' };
+      return sourcesState;
+    }
+    return { at: 0, sources: null, origin: 'none' };
+  }
+}
+
+app.get('/api/sources', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  const force = req.query.refresh === '1';
+  if (force && !sessionFromRequest(req)) {
+    return res.status(401).json({ ok: false, error: '需要登录后才能强制刷新' });
+  }
+  const state = await getSources({ force });
+  if (!state.sources) {
+    return res.status(503).json({ ok: false, error: '暂时拿不到源列表' });
+  }
+  res.json({
+    ok: true,
+    origin: state.origin,
+    updatedAt: state.at ? new Date(state.at).toISOString() : null,
+    count: Object.keys(state.sources).length,
+    sources: state.sources
+  });
+});
+
 app.post('/api/logout', (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('Set-Cookie',
@@ -543,6 +621,10 @@ app.listen(config.port, () => {
   } else {
     console.log('警告: 未设置 PASSWORD 环境变量，用户将被要求设置密码');
   }
+  // 预热订阅缓存（失败不影响启动，第一次请求会再试）
+  getSources().then((s) => {
+    if (s.sources) console.log(`[sources] 就绪：${Object.keys(s.sources).length} 个源（${s.origin}）`);
+  }).catch(() => {});
   if (config.debug) {
     console.log('调试模式已启用');
     console.log('配置:', { ...config, password: config.password ? '******' : '' });

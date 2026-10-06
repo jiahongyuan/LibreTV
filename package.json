@@ -8,6 +8,7 @@
   "license": "Apache-2.0",
   "scripts": {
     "build": "node scripts/build.mjs",
+    "sources": "node scripts/fetch-sources.mjs",
     "dev": "npm run build && nodemon server.mjs",
     "start": "node server.mjs"
   },

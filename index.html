@@ -82,6 +82,7 @@
                     <button onclick="selectAllAPIs(true)" class="px-2 py-1 bg-[#333] hover:bg-[#444] text-white text-xs rounded">全选</button>
                     <button onclick="selectAllAPIs(false)" class="px-2 py-1 bg-[#333] hover:bg-[#444] text-white text-xs rounded">全不选</button>
                     <button onclick="selectAllAPIs(true, true)" class="px-2 py-1 bg-[#333] hover:bg-[#444] text-white text-xs rounded">全选普通资源</button>
+                    <button onclick="speedTestSources()" class="px-2 py-1 bg-indigo-600 hover:bg-indigo-700 text-white text-xs rounded">测速</button>
                 </div>
                 
                 <!-- API选择区域 - 使用滚动区域 -->
@@ -96,6 +97,9 @@
                     <span>已选API数量：<span id="selectedApiCount" class="text-white">0</span></span>
                     <span id="siteStatus" class="ml-2"></span>
                 </div>
+
+                <!-- 测速结果（点「测速」后显示） -->
+                <div id="speedTestResults" class="hidden mt-3 p-2 bg-[#191919] rounded-lg"></div>
             </div>
 
             <!-- 自定义API管理区域 -->
@@ -401,6 +405,10 @@
     <script src="js/password.js"></script>
     <script src="js/search.js"></script>
     <script src="js/app.js"></script>
+    <!-- 订阅源热更新（从服务端 /api/sources 拉取） -->
+    <script src="js/sources-refresh.js"></script>
+    <!-- 数据源测速 -->
+    <script src="js/speedtest.js"></script>
 
     <!-- PWA 注册 -->
     <script src="js/pwa-register.js"></script>

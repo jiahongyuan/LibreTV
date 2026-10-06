@@ -584,7 +584,8 @@ async function handleMultipleCustomSearch(searchQuery, customApiUrls) {
         //   /api/login  —— 登录本身（此时还没通过校验，被挡下会返回 undefined，
         //                  调用方读 resp.ok 直接 TypeError → 死锁）
         //   /api/session、/api/logout —— 会话复核 / 登出
-        const SERVER_ROUTES = ['/api/login', '/api/session', '/api/logout'];
+        //   /api/sources —— 服务端拉取的订阅源清单
+        const SERVER_ROUTES = ['/api/login', '/api/session', '/api/logout', '/api/sources'];
         if (requestUrl.pathname.startsWith('/api/') &&
             SERVER_ROUTES.indexOf(requestUrl.pathname) === -1) {
             if (window.isPasswordProtected && window.isPasswordVerified) {
