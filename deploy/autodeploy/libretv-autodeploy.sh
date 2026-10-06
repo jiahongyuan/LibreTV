@@ -9,8 +9,11 @@ PROJ=${PAGES_PROJECT:-steve-libretv}
 export PATH=/home/steve/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 if [ -f /home/steve/.cloudflare/env ]; then
+  # set -a：把 source 进来的变量自动 export，否则子进程（npx wrangler）看不到
+  set -a
   # shellcheck disable=SC1091
   . /home/steve/.cloudflare/env
+  set +a
 fi
 
 log() { echo "[$(date -u +%FT%TZ)] $*" >>"$LOG"; }
