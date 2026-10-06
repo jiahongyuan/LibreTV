@@ -1,0 +1,8 @@
+[Unit]
+Description=LibreTV IP 证书续期（certbot in docker，webroot）
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/libretv-tls/renew.sh

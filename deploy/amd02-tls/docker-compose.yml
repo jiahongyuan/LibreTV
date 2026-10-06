@@ -1,0 +1,24 @@
+services:
+  libretv-tls:
+    build: .
+    image: libretv-tls:local
+    container_name: libretv-tls
+    restart: unless-stopped
+    ports:
+      - "80:80"    # ACME http-01 挑战 + 301 跳转到 https
+      - "443:443"  # TLS 终结
+    volumes:
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - /var/www/acme:/var/www/acme
+    environment:
+      - CERT_DIR=/etc/letsencrypt/live/libretv-ip
+      - ACME_ROOT=/var/www/acme
+      - UPSTREAM_HOST=libretv
+      - UPSTREAM_PORT=8080
+      - HSTS_MAX_AGE=86400
+    networks:
+      - libretv_default
+
+networks:
+  libretv_default:
+    external: true
