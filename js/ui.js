@@ -23,6 +23,58 @@ function toggleSettings(e) {
     panel.classList.toggle('show');
 }
 
+// ------------------------------------------------------------------
+// 复制到剪贴板
+// 明文 HTTP 下 navigator.clipboard 是 undefined（仅安全上下文可用），
+// 直接调用会「同步抛 TypeError」—— .catch() 抓不到，表现为点了没反应。
+// ------------------------------------------------------------------
+function copyTextToClipboard(text) {
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        return navigator.clipboard.writeText(text);
+    }
+    return new Promise(function (resolve, reject) {
+        try {
+            var ta = document.createElement('textarea');
+            ta.value = text;
+            ta.setAttribute('readonly', '');
+            ta.style.position = 'fixed';
+            ta.style.top = '-1000px';
+            ta.style.left = '0';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.select();
+            ta.setSelectionRange(0, ta.value.length);
+            var ok = document.execCommand('copy');
+            document.body.removeChild(ta);
+            if (ok) { resolve(); } else { reject(new Error('execCommand copy 失败')); }
+        } catch (e) {
+            reject(e);
+        }
+    });
+}
+
+// HTML 转义（用于 innerHTML 的文本节点 / 属性值）
+function escapeHtml(value) {
+    return String(value === null || value === undefined ? '' : value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+// 用于 onclick="fn('...')" 这种「HTML 属性里嵌 JS 字符串」的场景：
+// 先做 HTML 转义（& " < >），再转义反斜杠与单引号，两层都不能少。
+function escapeJsAttr(value) {
+    return String(value === null || value === undefined ? '' : value)
+        .replace(/&/g, '&amp;')
+        .replace(/"/g, '&quot;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/\\/g, '\\\\')
+        .replace(/'/g, "\\'");
+}
+
 // 改进的Toast显示函数 - 支持队列显示多个Toast
 const toastQueue = [];
 let isShowingToast = false;

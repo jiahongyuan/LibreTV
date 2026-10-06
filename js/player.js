@@ -995,7 +995,7 @@ function copyLinks() {
     const urlParams = new URLSearchParams(window.location.search);
     const linkUrl = urlParams.get('url') || '';
     if (linkUrl !== '') {
-        navigator.clipboard.writeText(linkUrl).then(() => {
+        copyTextToClipboard(linkUrl).then(() => {
             showToast('播放链接已复制', 'success');
         }).catch(err => {
             showToast('复制失败，请检查浏览器权限', 'error');
@@ -1561,12 +1561,16 @@ async function testVideoSourceSpeed(sourceKey, vodId) {
         // 测试视频链接响应时间
         const videoTestStart = performance.now();
         try {
+            // AbortSignal 的 timeout() 静态方法自 Safari 16 起才有，iOS 13.5 上不存在
+            // （调用即 TypeError），这里改用 AbortController + setTimeout。
+            const videoController = new AbortController();
+            const videoTimeoutId = setTimeout(() => videoController.abort(), 5000);
             const videoResponse = await fetch(firstEpisodeUrl, {
                 method: 'HEAD',
                 mode: 'no-cors',
                 cache: 'no-cache',
-                signal: AbortSignal.timeout(5000) // 5秒超时
-            });
+                signal: videoController.signal
+            }).finally(() => clearTimeout(videoTimeoutId));
             
             const videoTestEnd = performance.now();
             const totalTime = videoTestEnd - startTime;
@@ -1627,7 +1631,7 @@ async function showSwitchResourceModal() {
     const modalTitle = document.getElementById('modalTitle');
     const modalContent = document.getElementById('modalContent');
 
-    modalTitle.innerHTML = `<span class="break-words">${currentVideoTitle}</span>`;
+    modalTitle.innerHTML = `<span class="break-words">${escapeHtml(currentVideoTitle)}</span>`;
     modalContent.innerHTML = '<div style="text-align:center;padding:20px;color:#aaa;grid-column:1/-1;">正在加载资源列表...</div>';
     modal.classList.remove('hidden');
 

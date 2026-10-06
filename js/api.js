@@ -580,7 +580,13 @@ async function handleMultipleCustomSearch(searchQuery, customApiUrls) {
     window.fetch = async function(input, init) {
         const requestUrl = typeof input === 'string' ? new URL(input, window.location.origin) : input.url;
         
-        if (requestUrl.pathname.startsWith('/api/')) {
+        // ⚠️ 服务端真正实现的路由必须放行，否则被拦截器当成本地逻辑处理：
+        //   /api/login  —— 登录本身（此时还没通过校验，被挡下会返回 undefined，
+        //                  调用方读 resp.ok 直接 TypeError → 死锁）
+        //   /api/session、/api/logout —— 会话复核 / 登出
+        const SERVER_ROUTES = ['/api/login', '/api/session', '/api/logout'];
+        if (requestUrl.pathname.startsWith('/api/') &&
+            SERVER_ROUTES.indexOf(requestUrl.pathname) === -1) {
             if (window.isPasswordProtected && window.isPasswordVerified) {
                 if (window.isPasswordProtected() && !window.isPasswordVerified()) {
                     return;
@@ -615,10 +621,15 @@ async function handleMultipleCustomSearch(searchQuery, customApiUrls) {
 async function testSiteAvailability(apiUrl) {
     try {
         // 使用更简单的测试查询
+        // AbortSignal 的 timeout() 静态方法自 Safari 16 起才有，iOS 13.5 上不存在（调用即 TypeError），
+        // 这里改用 AbortController + setTimeout。
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
         const response = await fetch('/api/search?wd=test&customApi=' + encodeURIComponent(apiUrl), {
             // 添加超时
-            signal: AbortSignal.timeout(5000)
+            signal: controller.signal
         });
+        clearTimeout(timeoutId);
         
         // 检查响应状态
         if (!response.ok) {

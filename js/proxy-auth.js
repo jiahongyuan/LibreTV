@@ -10,33 +10,50 @@ let cachedPasswordHash = null;
  * 获取当前会话的密码哈希
  */
 async function getPasswordHash() {
+    // Cookie 模式（Node/Docker）：凭据在 HttpOnly Cookie 里，前端既拿不到也不需要，
+    // 代理 URL 不再携带任何令牌 —— 也就不会漏进历史/日志/Referer。
+    if (window.__ENV__ && window.__ENV__.PASSWORD_PROTECTED === 'true') {
+        return null;
+    }
     if (cachedPasswordHash) {
         return cachedPasswordHash;
     }
     
-    // 1. 优先从已存储的代理鉴权哈希获取
+    // 1. 优先使用「密码验证成功后」存下来的令牌。
+    //    password.js 写入；Node/Docker 部署下由 POST /api/login 下发，
+    //    页面里不再内联哈希。
+    try {
+        const key = (window.PASSWORD_CONFIG && window.PASSWORD_CONFIG.localStorageKey) || 'passwordVerified';
+        const stored = localStorage.getItem(key);
+        if (stored) {
+            const parsed = JSON.parse(stored);
+            const ttl = (window.PASSWORD_CONFIG && window.PASSWORD_CONFIG.verificationTTL) ||
+                90 * 24 * 60 * 60 * 1000;
+            if (parsed && parsed.timestamp && typeof parsed.passwordHash === 'string' &&
+                parsed.passwordHash.length === 64 && Date.now() - parsed.timestamp < ttl) {
+                cachedPasswordHash = parsed.passwordHash;
+                return parsed.passwordHash;
+            }
+        }
+    } catch (error) {
+        console.error('读取本地鉴权令牌失败:', error);
+    }
+
+    // 2. 兼容旧的独立缓存键
     const storedHash = localStorage.getItem('proxyAuthHash');
     if (storedHash) {
         cachedPasswordHash = storedHash;
         return storedHash;
     }
-    
-    // 2. 尝试从密码验证状态获取（password.js 验证后存储的哈希）
-    const passwordVerified = localStorage.getItem('passwordVerified');
-    const storedPasswordHash = localStorage.getItem('passwordHash');
-    if (passwordVerified === 'true' && storedPasswordHash) {
-        localStorage.setItem('proxyAuthHash', storedPasswordHash);
-        cachedPasswordHash = storedPasswordHash;
-        return storedPasswordHash;
-    }
-    
-    // 3. 尝试从用户输入的密码生成哈希
+
+    // 3. 兼容「缓存了明文密码」的旧版本
     const userPassword = localStorage.getItem('userPassword');
     if (userPassword) {
         try {
-            // 动态导入 sha256 函数
-            const { sha256 } = await import('./sha256.js');
-            const hash = await sha256(userPassword);
+            // [旧引擎/HTTP] 不用动态模块导入（旧 WebKit 与 Chrome 44 都不支持），
+            // 也不用 crypto.subtle（仅安全上下文可用），直接用页面已加载的纯 JS 实现。
+            const sha256Fn = window._jsSha256 || window.libretvSha256 || window.sha256;
+            const hash = await sha256Fn(userPassword);
             localStorage.setItem('proxyAuthHash', hash);
             cachedPasswordHash = hash;
             return hash;
@@ -44,13 +61,14 @@ async function getPasswordHash() {
             console.error('生成密码哈希失败:', error);
         }
     }
-    
-    // 4. 如果用户没有设置密码，尝试使用环境变量中的密码哈希
-    if (window.__ENV__ && window.__ENV__.PASSWORD) {
+
+    // 4. 旧部署平台（CF/Netlify/Vercel）仍把哈希内联在页面里
+    if (window.__ENV__ && typeof window.__ENV__.PASSWORD === 'string' &&
+        window.__ENV__.PASSWORD.length === 64) {
         cachedPasswordHash = window.__ENV__.PASSWORD;
         return window.__ENV__.PASSWORD;
     }
-    
+
     return null;
 }
 

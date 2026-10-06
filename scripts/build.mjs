@@ -231,8 +231,15 @@ async function selfCheck() {
     // 以及 box-shadow 中的 `inset` 关键字
     { name: 'inset 简写', re: /(?:^|[;{]\s*)inset\s*:/gm },
     { name: 'aspect-ratio', re: /(?:^|[;{]\s*)aspect-ratio\s*:/gm },
+    // :where()/:is() 自 Safari 14 起才有；旧 WebKit 会整条丢弃该规则
+    { name: ':where() (Safari 14)', re: /:where\s*\(/g },
+    { name: ':is() (Safari 14)', re: /:is\s*\(/g },
   ];
   const jsPatterns = [
+    // ⚠️ AbortSignal.timeout() 自 Safari 16 起才有 —— 曾经漏检，
+    // 导致 iOS 13.5 上调用即 TypeError。新增任何「按 Safari 版本才有的 API」都要加进来。
+    { name: 'AbortSignal.timeout() (Safari 16)', re: /AbortSignal\s*\.\s*timeout/g },
+    { name: 'crypto.randomUUID() (Safari 15.4)', re: /randomUUID/g },
     { name: 'Array.prototype.at()', re: /\.at\(\s*[-0-9]/g },
     { name: 'structuredClone()', re: /structuredClone\s*\(/g },
     { name: 'Object.hasOwn()', re: /Object\.hasOwn\s*\(/g },

@@ -4,12 +4,21 @@
  * 检查是否设置了密码保护
  * 通过读取页面上嵌入的环境变量来检查
  */
-function isPasswordProtected() {
-    // 只检查普通密码
+// 旧部署平台（CF/Netlify/Vercel）仍把 sha256(PASSWORD) 内联进 HTML；
+// Node/Docker 部署不再内联哈希，只注入 PASSWORD_PROTECTED 布尔值。
+function legacyInlineHash() {
     const pwd = window.__ENV__ && window.__ENV__.PASSWORD;
-    
-    // 检查普通密码是否有效
-    return typeof pwd === 'string' && pwd.length === 64 && !/^0+$/.test(pwd);
+    return (typeof pwd === 'string' && pwd.length === 64 && !/^0+$/.test(pwd)) ? pwd : null;
+}
+
+function isPasswordProtected() {
+    if (legacyInlineHash()) return true;
+    return !!(window.__ENV__ && window.__ENV__.PASSWORD_PROTECTED === 'true');
+}
+
+// Node/Docker 部署：凭据在 HttpOnly Cookie 里（前端读不到、URL 里也没有）
+function isCookieMode() {
+    return !!(window.__ENV__ && window.__ENV__.PASSWORD_PROTECTED === 'true');
 }
 
 /**
@@ -45,20 +54,40 @@ window.isPasswordRequired = isPasswordRequired;
  */
 async function verifyPassword(password) {
     try {
-        const correctHash = window.__ENV__?.PASSWORD;
-        if (!correctHash) return false;
+        if (!isPasswordProtected()) return false;
 
-        const inputHash = await sha256(password);
-        const isValid = inputHash === correctHash;
+        if (isCookieMode()) {
+            // Node/Docker：密码只发给服务端校验（定时安全比较 + 限速），
+            // 服务端用 HttpOnly Cookie 下发会话令牌 —— 前端拿不到，URL 里也没有。
+            const resp = await fetch('/api/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ password: password })
+            });
+            if (!resp.ok) return false;
+            const data = await resp.json();
+            if (!data || data.ok !== true) return false;
 
-        if (isValid) {
             localStorage.setItem(PASSWORD_CONFIG.localStorageKey, JSON.stringify({
                 verified: true,
                 timestamp: Date.now(),
-                passwordHash: correctHash
+                mode: 'cookie'
             }));
+            return true;
         }
-        return isValid;
+
+        // 旧平台（CF/Netlify/Vercel）：页面内联了哈希，本地对比
+        const authHash = legacyInlineHash();
+        if (!authHash) return false;
+        const inputHash = await sha256(password);
+        if (inputHash !== authHash) return false;
+
+        localStorage.setItem(PASSWORD_CONFIG.localStorageKey, JSON.stringify({
+            verified: true,
+            timestamp: Date.now(),
+            passwordHash: authHash
+        }));
+        return true;
     } catch (error) {
         console.error('验证密码时出错:', error);
         return false;
@@ -73,11 +102,18 @@ function isPasswordVerified() {
         const stored = localStorage.getItem(PASSWORD_CONFIG.localStorageKey);
         if (!stored) return false;
 
-        const { timestamp, passwordHash } = JSON.parse(stored);
-        const currentHash = window.__ENV__?.PASSWORD;
+        const parsed = JSON.parse(stored);
+        const timestamp = parsed.timestamp;
 
-        return timestamp && passwordHash === currentHash &&
-            Date.now() - timestamp < PASSWORD_CONFIG.verificationTTL;
+        if (!timestamp || Date.now() - timestamp >= PASSWORD_CONFIG.verificationTTL) {
+            return false;
+        }
+
+        // Cookie 模式：本地只存「已验证」标记，真凭据在 HttpOnly Cookie 里，
+        // 页面启动时用 /api/session 复核（见 checkServerSession）。
+        if (isCookieMode()) return parsed.verified === true;
+
+        return typeof parsed.passwordHash === 'string' && parsed.passwordHash.length === 64;
     } catch (error) {
         console.error('检查密码验证状态时出错:', error);
         return false;
@@ -89,6 +125,7 @@ window.isPasswordProtected = isPasswordProtected;
 window.isPasswordRequired = isPasswordRequired;
 window.isPasswordVerified = isPasswordVerified;
 window.verifyPassword = verifyPassword;
+window.checkServerSession = checkServerSession;
 window.ensurePasswordProtection = ensurePasswordProtection;
 
 // SHA-256实现，可用Web Crypto API
@@ -231,11 +268,38 @@ function initPasswordProtection() {
         showPasswordModal();
         return;
     }
-    
+
     // 如果设置了密码但用户未验证，显示密码输入框
     if (isPasswordProtected() && !isPasswordVerified()) {
         showPasswordModal();
         return;
+    }
+
+    // 本地标记说「已验证」，但真凭据在 HttpOnly Cookie 里 —— 再跟服务端确认一次。
+    // Cookie 过期 / 被清掉 / 换了设备时，清掉本地标记并重新弹窗。
+    if (isPasswordProtected()) {
+        checkServerSession().then(function (ok) {
+            if (!ok) {
+                localStorage.removeItem(PASSWORD_CONFIG.localStorageKey);
+                showPasswordModal();
+            }
+        });
+    }
+}
+
+/**
+ * 复核服务端会话（Cookie 模式）
+ */
+async function checkServerSession() {
+    if (!isCookieMode() || !isPasswordProtected()) return true;
+    try {
+        const resp = await fetch('/api/session', { cache: 'no-store' });
+        if (!resp.ok) return false;
+        const data = await resp.json();
+        return !!(data && data.ok === true);
+    } catch (error) {
+        console.warn('会话复核失败:', error && error.message);
+        return false;
     }
 }
 
