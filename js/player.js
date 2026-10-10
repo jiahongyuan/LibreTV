@@ -459,7 +459,9 @@ function initPlayer(videoUrl) {
         fullscreen: true,
         fullscreenWeb: true,
         subtitleOffset: false,
-        miniProgressBar: true,
+        // 关闭底部迷你进度条：控制栏自动隐藏后，播放器底部不再残留一条细进度线
+        // （全屏时这条线横贯整屏底部，最显眼）
+        miniProgressBar: false,
         mutex: true,
         backdrop: true,
         playsInline: true,
@@ -1434,6 +1436,14 @@ function toggleControlsLock() {
     const container = document.getElementById('playerContainer');
     controlsLocked = !controlsLocked;
     container.classList.toggle('controls-locked', controlsLocked);
+    // Artplayer 的点击/手势判定都带 !e.isLock 守卫（见 libs/artplayer.min.js），
+    // 置上它才能让移动端真正“锁住”（否则点屏幕仍会暂停、滑动仍会快进）。
+    // 桌面端鼠标点击不受 isLock 约束，那边靠下面的 .controls-locked 样式把控制栏藏掉。
+    // 注：Artplayer 自带的 lock 组件只在「移动端 + lock:true」时才注册，且会额外挂一个锁图标图层，
+    // 这里不用它，避免多出一套与页面按钮重复的 UI。
+    if (art) {
+        art.isLock = controlsLocked;
+    }
     const icon = document.getElementById('lockIcon');
     // 切换图标：锁 / 解锁
     icon.innerHTML = controlsLocked

@@ -799,11 +799,13 @@ body {
     transform: translateX(-50%) translateY(0);
 }
 
-/* 锁定控制时屏蔽交互 */
-.player-container.controls-locked .dplayer-controller,
-.player-container.controls-locked .dplayer-mask,
-.player-container.controls-locked .dplayer-bar-wrap,
-.player-container.controls-locked .dplayer-statusbar,
+/* 锁定控制时隐藏控制栏。
+   ⚠️ 必须用 Artplayer 的真实类名：控制栏是 .art-bottom（内含 .art-progress + .art-controls）。
+   原先写的 .dplayer-controller / .dplayer-mask / .dplayer-bar-wrap / .dplayer-statusbar 是旧版
+   DPlayer 的类名，在当前的 Artplayer v5.2.4 下选不中任何元素 —— 所以“锁定控制”一直没反应。
+   ⚠️ 也别改回 .art-mask：那是中间的大播放/加载状态图层（.art-mask > .art-state），
+   藏掉它会把加载动画和居中播放按钮一起藏了。 */
+.player-container.controls-locked .art-video-player .art-bottom,
 .player-container.controls-locked .shortcut-hint {
     opacity: 0 !important;
     pointer-events: none !important;
