@@ -57,6 +57,12 @@ document.addEventListener('DOMContentLoaded', function () {
         adFilterToggle.checked = localStorage.getItem(PLAYER_CONFIG.adFilteringStorage) !== 'false'; // 默认为true
     }
 
+    // 设置「屏蔽成人源」开关初始状态
+    const blockAdultToggle = document.getElementById('blockAdultToggle');
+    if (blockAdultToggle) {
+        blockAdultToggle.checked = localStorage.getItem('blockAdultSources') === 'true';
+    }
+
     // 设置事件监听器
     setupEventListeners();
 
@@ -113,8 +119,10 @@ function initAPICheckboxes() {
 
 // 添加成人API列表
 function addAdultAPI() {
-    // 仅在隐藏设置为false时添加成人API组
-    if (!HIDE_BUILTIN_ADULT_APIS && (localStorage.getItem('yellowFilterEnabled') === 'false')) {
+    // 仅在隐藏设置为false时添加成人API组（「屏蔽成人源」开启时整组不渲染）
+    if (!HIDE_BUILTIN_ADULT_APIS &&
+        (localStorage.getItem('yellowFilterEnabled') === 'false') &&
+        localStorage.getItem('blockAdultSources') !== 'true') {
         const container = document.getElementById('apiCheckboxes');
 
         // 添加成人API组标题
@@ -123,7 +131,7 @@ function addAdultAPI() {
         adultdiv.className = 'grid grid-cols-2 gap-2';
         const adultTitle = document.createElement('div');
         adultTitle.className = 'api-group-title adult';
-        adultTitle.innerHTML = `黄色资源采集站 <span class="adult-warning">
+        adultTitle.innerHTML = `扩展资源 <span class="adult-warning">
             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
             </svg>
@@ -144,7 +152,7 @@ function addAdultAPI() {
                        class="form-checkbox h-3 w-3 text-blue-600 bg-[#222] border border-[#333] api-adult" 
                        ${checked ? 'checked' : ''} 
                        data-api="${apiKey}">
-                <label for="api_${apiKey}" class="ml-1 text-xs text-pink-400 truncate">${api.name}</label>
+                <label for="api_${apiKey}" class="ml-1 text-xs text-gray-400 truncate">${api.name}</label>
             `;
             adultdiv.appendChild(checkbox);
 
@@ -183,7 +191,7 @@ function checkAdultAPIsSelected() {
 
         // 修改描述文字
         if (filterDescription) {
-            filterDescription.innerHTML = '<strong class="text-pink-300">选中黄色资源站时无法启用此过滤</strong>';
+            filterDescription.innerHTML = '<strong class="text-gray-400">选中扩展源时无法启用此过滤</strong>';
         }
 
         // 移除提示信息（如果存在）
@@ -224,7 +232,7 @@ function renderCustomAPIsList() {
         const apiItem = document.createElement('div');
         apiItem.className = 'flex items-center justify-between p-1 mb-1 bg-[#222] rounded';
         const textColorClass = api.isAdult ? 'text-pink-400' : 'text-white';
-        const adultTag = api.isAdult ? '<span class="text-xs text-pink-400 mr-1">(18+)</span>' : '';
+        const adultTag = api.isAdult ? '<span class="text-xs text-gray-500 mr-1">扩展</span>' : '';
         // 新增 detail 地址显示
         const detailLine = api.detail ? `<div class="text-xs text-gray-400 truncate">detail: ${api.detail}</div>` : '';
         apiItem.innerHTML = `
@@ -559,6 +567,29 @@ function setupEventListeners() {
             localStorage.setItem(PLAYER_CONFIG.adFilteringStorage, e.target.checked);
         });
     }
+
+    // 屏蔽成人源开关事件绑定
+    const blockAdultToggle = document.getElementById('blockAdultToggle');
+    if (blockAdultToggle) {
+        blockAdultToggle.addEventListener('change', function (e) {
+            const on = e.target.checked;
+            localStorage.setItem('blockAdultSources', on ? 'true' : 'false');
+            if (on) {
+                // 开启：立刻从内存里摘掉成人源，重画列表与计数
+                if (typeof window.__applyAdultBlock === 'function') window.__applyAdultBlock();
+                const staleAdultDiv = document.getElementById('adultdiv');
+                if (staleAdultDiv) staleAdultDiv.remove();
+                if (typeof initAPICheckboxes === 'function') initAPICheckboxes();
+                if (typeof updateSelectedApiCount === 'function') updateSelectedApiCount();
+                try {
+                    window.dispatchEvent(new CustomEvent('sources-updated', { detail: { reason: 'block-adult' } }));
+                } catch (err) { /* 老浏览器忽略 */ }
+            } else {
+                // 关闭：成人源要重新合并回来，直接重载最省事也最可靠
+                location.reload();
+            }
+        });
+    }
 }
 
 // 重置搜索区域
@@ -571,6 +602,12 @@ function resetSearchArea() {
     document.getElementById('searchArea').classList.add('flex-1');
     document.getElementById('searchArea').classList.remove('mb-8');
     document.getElementById('resultsArea').classList.add('hidden');
+
+    // 恢复首页的分类浏览区（搜索时被隐藏过）
+    const browseAreaEl = document.getElementById('browseArea');
+    if (browseAreaEl) {
+        browseAreaEl.classList.remove('hidden');
+    }
 
     // 确保页脚正确显示，移除相对定位
     const footer = document.querySelector('.footer');
@@ -607,132 +644,45 @@ function getCustomApiInfo(customApiIndex) {
 }
 
 // 搜索功能 - 修改为支持多选API和多页结果
-async function search() {
-    // 强化的密码保护校验 - 防止绕过
-    try {
-        if (window.ensurePasswordProtection) {
-            window.ensurePasswordProtection();
-        } else {
-            // 兼容性检查
-            if (window.isPasswordProtected && window.isPasswordVerified) {
-                if (window.isPasswordProtected() && !window.isPasswordVerified()) {
-                    showPasswordModal && showPasswordModal();
-                    return;
-                }
-            }
-        }
-    } catch (error) {
-        console.warn('Password protection check failed:', error.message);
-        return;
-    }
-    const query = document.getElementById('searchInput').value.trim();
+// 片名归一化：只抹平空格、标点、全半角与大小写，不做任何模糊扩展
+function normalizeTitleForMatch(value) {
+    return String(value || '')
+        .replace(/[\s\u3000]+/g, '')
+        .replace(/[（）()【】\[\]《》<>·・:：\-—_~～!！?？,，.。'’"“”、|/\\]/g, '')
+        .toLowerCase();
+}
 
-    if (!query) {
-        showToast('请输入搜索内容', 'info');
-        return;
-    }
+/**
+ * 精确匹配筛选
+ * 1) 优先取「归一化后完全相等」的条目；
+ * 2) 一条都没有时，退回「以关键词开头」的条目，并标记 mode=prefix 让 UI 说明；
+ * 3) 仍然没有就返回空数组（走原有的「没有找到匹配的结果」）。
+ */
+function rankMatches(list, query) {
+    const q = normalizeTitleForMatch(query);
+    if (!q) return { items: list };
+    const ranked = list.map(function (item) {
+        const n = normalizeTitleForMatch(item.vod_name);
+        let rank = 3;
+        if (n === q) rank = 0;                       // 完全一致
+        else if (n.indexOf(q) === 0) rank = 1;       // 以关键词开头
+        else if (n.indexOf(q) > 0) rank = 2;         // 包含关键词
+        return { item: item, rank: rank };
+    });
+    ranked.sort(function (a, b) {
+        if (a.rank !== b.rank) return a.rank - b.rank;
+        const nc = (a.item.vod_name || '').localeCompare(b.item.vod_name || '');
+        if (nc !== 0) return nc;
+        return (a.item.source_name || '').localeCompare(b.item.source_name || '');
+    });
+    return { items: ranked.map(function (r) { return r.item; }) };
+}
 
-    if (selectedAPIs.length === 0) {
-        showToast('请至少选择一个API源', 'warning');
-        return;
-    }
 
-    showLoading();
-
-    try {
-        // 保存搜索历史
-        saveSearchHistory(query);
-
-        // 从所有选中的API源搜索
-        let allResults = [];
-        const searchPromises = selectedAPIs.map(apiId => 
-            searchByAPIAndKeyWord(apiId, query)
-        );
-
-        // 等待所有搜索请求完成
-        const resultsArray = await Promise.all(searchPromises);
-
-        // 合并所有结果
-        resultsArray.forEach(results => {
-            if (Array.isArray(results) && results.length > 0) {
-                allResults = allResults.concat(results);
-            }
-        });
-
-        // 对搜索结果进行排序：按名称优先，名称相同时按接口源排序
-        allResults.sort((a, b) => {
-            // 首先按照视频名称排序
-            const nameCompare = (a.vod_name || '').localeCompare(b.vod_name || '');
-            if (nameCompare !== 0) return nameCompare;
-            
-            // 如果名称相同，则按照来源排序
-            return (a.source_name || '').localeCompare(b.source_name || '');
-        });
-
-        // 更新搜索结果计数
-        const searchResultsCount = document.getElementById('searchResultsCount');
-        if (searchResultsCount) {
-            searchResultsCount.textContent = allResults.length;
-        }
-
-        // 显示结果区域，调整搜索区域
-        document.getElementById('searchArea').classList.remove('flex-1');
-        document.getElementById('searchArea').classList.add('mb-8');
-        document.getElementById('resultsArea').classList.remove('hidden');
-
-        // 隐藏豆瓣推荐区域（如果存在）
-        const doubanArea = document.getElementById('doubanArea');
-        if (doubanArea) {
-            doubanArea.classList.add('hidden');
-        }
-
-        const resultsDiv = document.getElementById('results');
-
-        // 如果没有结果
-        if (!allResults || allResults.length === 0) {
-            resultsDiv.innerHTML = `
-                <div class="col-span-full text-center py-16">
-                    <svg class="mx-auto h-12 w-12 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" 
-                              d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                    <h3 class="mt-2 text-lg font-medium text-gray-400">没有找到匹配的结果</h3>
-                    <p class="mt-1 text-sm text-gray-500">请尝试其他关键词或更换数据源</p>
-                </div>
-            `;
-            hideLoading();
-            return;
-        }
-
-        // 有搜索结果时，才更新URL
-        try {
-            // 使用URI编码确保特殊字符能够正确显示
-            const encodedQuery = encodeURIComponent(query);
-            // 使用HTML5 History API更新URL，不刷新页面
-            window.history.pushState(
-                { search: query },
-                `搜索: ${query} - LibreTV`,
-                `/s=${encodedQuery}`
-            );
-            // 更新页面标题
-            document.title = `搜索: ${query} - LibreTV`;
-        } catch (e) {
-            console.error('更新浏览器历史失败:', e);
-            // 如果更新URL失败，继续执行搜索
-        }
-
-        // 处理搜索结果过滤：如果启用了黄色内容过滤，则过滤掉分类含有敏感内容的项目
-        const yellowFilterEnabled = localStorage.getItem('yellowFilterEnabled') === 'true';
-        if (yellowFilterEnabled) {
-            const banned = ['伦理片', '福利', '里番动漫', '门事件', '萝莉少女', '制服诱惑', '国产传媒', 'cosplay', '黑丝诱惑', '无码', '日本无码', '有码', '日本有码', 'SWAG', '网红主播', '色情片', '同性片', '福利视频', '福利片'];
-            allResults = allResults.filter(item => {
-                const typeName = item.type_name || '';
-                return !banned.some(keyword => typeName.includes(keyword));
-            });
-        }
-
+// 把搜索结果渲染成卡片（流式搜索时会被多次调用）
+function renderSearchCards(list) {
         // 添加XSS保护，使用textContent和属性转义
-        const safeResults = allResults.map(item => {
+        const safeResults = list.map(item => {
             const safeId = item.vod_id ? item.vod_id.toString().replace(/[^\w-]/g, '') : '';
             // 采集站返回的数据不可信：文本节点用 escapeHtml，
             // 要塞进 onclick="fn('...')" 的必须用 escapeJsAttr（只转义引号不够）。
@@ -801,7 +751,145 @@ async function search() {
             `;
         }).join('');
 
-        resultsDiv.innerHTML = safeResults;
+        document.getElementById('results').innerHTML = safeResults;
+}
+
+async function search() {
+    // 强化的密码保护校验 - 防止绕过
+    try {
+        if (window.ensurePasswordProtection) {
+            window.ensurePasswordProtection();
+        } else {
+            // 兼容性检查
+            if (window.isPasswordProtected && window.isPasswordVerified) {
+                if (window.isPasswordProtected() && !window.isPasswordVerified()) {
+                    showPasswordModal && showPasswordModal();
+                    return;
+                }
+            }
+        }
+    } catch (error) {
+        console.warn('Password protection check failed:', error.message);
+        return;
+    }
+    const query = document.getElementById('searchInput').value.trim();
+
+    if (!query) {
+        showToast('请输入搜索内容', 'info');
+        return;
+    }
+
+    if (selectedAPIs.length === 0) {
+        showToast('请至少选择一个API源', 'warning');
+        return;
+    }
+
+    showLoading();
+
+    try {
+        // 保存搜索历史
+        saveSearchHistory(query);
+
+        // 从所有选中的API源搜索（流式：哪个源先回来就先渲染，不等最慢的那个）
+        let allResults = [];
+        let urlUpdated = false;
+        let paintTimer = null;
+
+        function applyYellowFilter(list) {
+            if (localStorage.getItem('yellowFilterEnabled') !== 'true') return list;
+            const banned = ['伦理片', '福利', '里番动漫', '门事件', '萝莉少女', '制服诱惑', '国产传媒', 'cosplay', '黑丝诱惑', '无码', '日本无码', '有码', '日本有码', 'SWAG', '网红主播', '色情片', '同性片', '福利视频', '福利片'];
+            return list.filter(function (item) {
+                const typeName = item.type_name || '';
+                return !banned.some(function (keyword) { return typeName.indexOf(keyword) >= 0; });
+            });
+        }
+
+        function paint(isFinal) {
+            const ranked = rankMatches(allResults, query);
+            const list = applyYellowFilter(ranked.items);
+
+            if (!isFinal && list.length === 0) return;
+
+            const qNorm = normalizeTitleForMatch(query);
+            const exactCount = list.filter(function (x) {
+                return normalizeTitleForMatch(x.vod_name) === qNorm;
+            }).length;
+
+            const searchResultsCount = document.getElementById('searchResultsCount');
+            if (searchResultsCount) searchResultsCount.textContent = list.length;
+
+            const matchHint = document.getElementById('searchMatchHint');
+            if (matchHint) {
+                if (!list.length) matchHint.textContent = '';
+                else if (exactCount === list.length) matchHint.textContent = '· 精确匹配';
+                else if (exactCount > 0) matchHint.textContent = '· 精确 ' + exactCount + ' 条，其余为相关结果';
+                else matchHint.textContent = '· 相关结果';
+            }
+
+            document.getElementById('searchArea').classList.remove('flex-1');
+            document.getElementById('searchArea').classList.add('mb-8');
+            document.getElementById('resultsArea').classList.remove('hidden');
+
+            const doubanArea = document.getElementById('doubanArea');
+            if (doubanArea) doubanArea.classList.add('hidden');
+            const browseAreaOnSearch = document.getElementById('browseArea');
+            if (browseAreaOnSearch) browseAreaOnSearch.classList.add('hidden');
+
+            const resultsDiv = document.getElementById('results');
+
+            if (list.length === 0) {
+                if (!isFinal) return;
+                resultsDiv.innerHTML = `
+                    <div class="col-span-full text-center py-16">
+                        <svg class="mx-auto h-12 w-12 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                  d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        <h3 class="mt-2 text-lg font-medium text-gray-400">没有找到匹配的结果</h3>
+                        <p class="mt-1 text-sm text-gray-500">请尝试其他关键词或更换数据源</p>
+                    </div>
+                `;
+                return;
+            }
+
+            renderSearchCards(list);
+
+            if (!urlUpdated) {
+                urlUpdated = true;
+                try {
+                    const encodedQuery = encodeURIComponent(query);
+                    window.history.pushState({ search: query }, `搜索: ${query} - LibreTV`, `/s=${encodedQuery}`);
+                    document.title = `搜索: ${query} - LibreTV`;
+                } catch (e) {
+                    console.error('更新浏览器历史失败:', e);
+                }
+            }
+        }
+
+        function schedulePaint(isFinal) {
+            if (isFinal) {
+                if (paintTimer) { clearTimeout(paintTimer); paintTimer = null; }
+                paint(true);
+                return;
+            }
+            if (paintTimer) return;
+            paintTimer = setTimeout(function () { paintTimer = null; paint(false); }, 120);
+        }
+
+        const searchPromises = selectedAPIs.map(function (apiId) {
+            return searchByAPIAndKeyWord(apiId, query).then(function (res) {
+                if (Array.isArray(res) && res.length) allResults = allResults.concat(res);
+                schedulePaint(false);
+                return res;
+            }).catch(function () {
+                schedulePaint(false);
+                return [];
+            });
+        });
+
+        await Promise.all(searchPromises);
+        schedulePaint(true);
+
     } catch (error) {
         console.error('搜索错误:', error);
         if (error.name === 'AbortError') {
@@ -1037,9 +1125,10 @@ function showVideoPlayer(url) {
     if (detailModal) {
         detailModal.classList.add('hidden');
     }
-    // 临时隐藏搜索结果和豆瓣区域，防止高度超出播放器而出现滚动条
+    // 临时隐藏搜索结果和分类浏览区域，防止高度超出播放器而出现滚动条
     document.getElementById('resultsArea').classList.add('hidden');
-    document.getElementById('doubanArea').classList.add('hidden');
+    const browseAreaEl = document.getElementById('browseArea');
+    if (browseAreaEl) browseAreaEl.classList.add('hidden');
     // 在框架中打开播放页面
     videoPlayerFrame = document.createElement('iframe');
     videoPlayerFrame.id = 'VideoPlayerFrame';
@@ -1063,8 +1152,9 @@ function closeVideoPlayer(home = false) {
             detailModal.classList.add('hidden');
         }
         // 如果启用豆瓣区域则显示豆瓣区域
-        if (localStorage.getItem('doubanEnabled') === 'true') {
-            document.getElementById('doubanArea').classList.remove('hidden');
+        const doubanAreaEl = document.getElementById('doubanArea');
+        if (doubanAreaEl && localStorage.getItem('doubanEnabled') === 'true') {
+            doubanAreaEl.classList.remove('hidden');
         }
     }
     if (home) {
@@ -1307,6 +1397,7 @@ async function exportConfig() {
         'selectedAPIs',
         'customAPIs',
         'yellowFilterEnabled',
+        'blockAdultSources',
         'adFilteringEnabled',
         'doubanEnabled',
         'hasInitializedDefaults'

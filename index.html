@@ -23,7 +23,7 @@
 <body class="page-bg text-white">
     <!-- 将历史记录按钮移到左上角，并缩小尺寸 -->
     <div class="fixed top-4 left-4 z-10">
-        <button onclick="toggleHistory(event)" class="bg-[#222] hover:bg-[#333] border border-[#333] hover:border-white rounded-lg px-3 py-1.5 transition-colors" aria-label="观看历史">
+        <button onclick="toggleHistory(event)" class="flex items-center justify-center bg-[#222] hover:bg-[#333] border border-[#333] hover:border-white rounded-lg transition-colors" style="width:3.5rem;height:3.5rem" aria-label="观看历史">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
             </svg>
@@ -31,8 +31,12 @@
     </div>
 
     <!-- 设置按钮保留在右上角，并缩小尺寸 -->
-    <div class="fixed top-4 right-4 z-10">
-        <button onclick="toggleSettings(event)" class="bg-[#222] hover:bg-[#333] border border-[#333] hover:border-white rounded-lg px-3 py-1.5 transition-colors" aria-label="打开设置">
+    <div class="fixed top-4 right-4 z-10 flex items-center gap-2">
+        <a href="/live" class="flex items-center justify-center gap-1 bg-[#222] hover:bg-[#333] border border-[#333] hover:border-white rounded-lg transition-colors px-3 text-sm" style="height:3.5rem" aria-label="直播">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path></svg>
+            <span class="hidden sm:inline">直播</span>
+        </a>
+        <button onclick="toggleSettings(event)" class="flex items-center justify-center bg-[#222] hover:bg-[#333] border border-[#333] hover:border-white rounded-lg transition-colors" style="width:3.5rem;height:3.5rem" aria-label="打开设置">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
@@ -163,18 +167,20 @@
                     </div>
                 </div>
                 
-                <!-- 豆瓣热门开关 -->
+                <!-- 屏蔽成人源开关 -->
                 <div class="flex items-center justify-between">
                     <div>
-                        <label class="text-sm font-medium text-gray-400">豆瓣热门推荐</label>
-                        <p class="text-xs text-gray-500 mt-1">首页显示豆瓣热门影视内容</p>
+                        <label class="text-sm font-medium text-gray-400">屏蔽成人源</label>
+                        <p class="text-xs text-gray-500 mt-1">开启后彻底移除成人采集源，不参与搜索与分类</p>
                     </div>
                     <div class="relative inline-block w-12 align-middle select-none">
-                        <input type="checkbox" id="doubanToggle" class="opacity-0 absolute w-full h-full cursor-pointer z-10">
+                        <input type="checkbox" id="blockAdultToggle" class="opacity-0 absolute w-full h-full cursor-pointer z-10">
                         <div class="toggle-bg bg-[#333] w-12 h-6 rounded-full transition-colors duration-300 ease-in-out"></div>
                         <div class="toggle-dot absolute w-5 h-5 bg-white rounded-full top-0.5 left-0.5 transition-transform duration-300 ease-in-out"></div>
                     </div>
                 </div>
+                
+                <!-- 豆瓣热门开关已移除：首页改为「源分类浏览」 -->
             </div>
 
             <!-- 一般功能区域 -->
@@ -187,23 +193,9 @@
         </div>
     </div>
 
-    <div class="container mx-auto px-4 py-8 flex flex-col h-screen">
+    <div class="container mx-auto px-4 pt-4 pb-8 flex flex-col min-h-screen">
         <div class="flex-1 flex flex-col">
-            <!-- 网站标志和口号 -->
-            <header class="text-center mb-2">
-                <div class="flex justify-center items-center mb-4">
-                    <a href="#" onclick="resetToHome(); return false;" class="flex items-center">
-                        <svg class="w-10 h-10 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
-                        </svg>
-                        <h1 class="text-5xl font-bold gradient-text">LibreTV</h1>
-                    </a>
-                </div>
-                <p class="text-gray-400 mb-8">自由观影，畅享精彩</p>
-            </header>
-            
-
-            <div id="searchArea" class="flex-1 flex flex-col items-center justify-center">
+            <div id="searchArea" class="flex flex-col items-center justify-center px-4 sm:px-8 pt-0 pb-3">
                 <div class="w-full max-w-2xl">
                     <div class="flex items-stretch mb-3 h-14 shadow-lg rounded-lg overflow-hidden">
                         <!-- 首页按钮 -->
@@ -239,51 +231,44 @@
                     </div>
                     
                     <!-- 添加最近搜索记录部分 -->
-                    <div id="recentSearches" class="mt-4 flex flex-wrap gap-2" aria-label="最近搜索记录">
+                    <div id="recentSearches" class="mt-4 flex flex-wrap gap-2 hidden" aria-label="最近搜索记录">
                         <!-- 这里会动态插入最近的搜索记录 -->
                     </div>
                 </div>
             </div>
             
-            <!-- 豆瓣热门推荐区域: 默认隐藏，现在位于搜索区域下方，调整宽度 -->
-            <div id="doubanArea" class="w-full my-8 hidden">
-                <div class="mx-auto max-w-screen-xl px-2">
-                    <!-- 改进标题和标签区域布局 -->
-                    <div class="mb-4">
-                        <!-- 标题和刷新按钮一行 -->
-                        <div class="flex items-center justify-between mb-4">
-                            <div class="flex items-center">
-                                <h2 class="text-xl font-bold text-white mr-4">豆瓣热门</h2>
-                                <!-- 添加电影/电视剧切换开关 -->
-                                <div class="flex items-center bg-[#222] rounded-full p-1">
-                                    <button id="douban-movie-toggle" class="px-3 py-1 text-sm rounded-full bg-pink-600 text-white">电影</button>
-                                    <button id="douban-tv-toggle" class="px-3 py-1 text-sm rounded-full text-gray-300 hover:text-white">电视剧</button>
-                                </div>
-                            </div>
-                            <button id="douban-refresh" class="text-sm px-3 py-1 bg-pink-600 hover:bg-pink-700 text-white rounded-lg flex items-center gap-1">
-                                <span>换一批</span>
-                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                                </svg>
-                            </button>
-                        </div>
-                        <!-- 分类标签独立成行，添加滚动支持以适应移动设备 -->
-                        <div class="overflow-x-auto pb-2">
-                            <div id="douban-tags" class="flex space-x-2 min-w-max"></div>
+            <!-- 源分类浏览区域：用各采集站自己的分类标签，替代豆瓣热门 -->
+            <div id="browseArea" class="w-full mt-2 mb-8 hidden">
+                <div class="mx-auto max-w-screen-xl px-4 sm:px-8">
+                    <div class="flex items-center justify-between mb-3">
+                        <h2 class="text-xl font-bold text-white">分类浏览</h2>
+                        <div class="flex items-center bg-[#222] rounded-full p-1">
+                            <button id="sort-latest" class="px-3 py-1 text-sm rounded-full bg-white text-black">最新</button>
+                            <button id="sort-hot" class="px-3 py-1 text-sm rounded-full text-gray-300">最热</button>
                         </div>
                     </div>
-                    
-                    <!-- 推荐内容 -->
-                    <div id="douban-results" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-3"></div>
+                    <!-- 数据源 -->
+                    <div class="overflow-x-auto pb-2">
+                        <div id="browse-sources" class="flex space-x-2 min-w-max"></div>
+                    </div>
+                    <!-- 该源自己的分类标签 -->
+                    <div class="overflow-x-auto pb-2 mb-3">
+                        <div id="browse-classes" class="flex space-x-2 min-w-max"></div>
+                    </div>
+                    <div id="browse-status" class="text-sm text-gray-500 mb-2"></div>
+                    <div id="browse-results" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-3" style="min-height:320px"></div>
+                    <!-- 分页 -->
+                    <div id="browse-pager" class="flex items-center justify-center flex-wrap mt-8 mb-10 px-2 sm:px-6"></div>
                 </div>
             </div>
             
             <!-- 搜索结果：初始隐藏 -->
             <div id="resultsArea" class="w-full hidden">
-                <div class="mx-auto max-w-7xl px-2"> <!-- 添加最大宽度限制并居中 -->
+                <div class="mx-auto max-w-7xl px-4 sm:px-8"> <!-- 添加最大宽度限制并居中 -->
                     <div class="flex justify-end items-center mb-4">
                         <div class="text-sm text-gray-400">
                             <span id="searchResultsCount">0</span> 个结果
+                            <span id="searchMatchHint" class="ml-2 text-xs text-gray-500"></span>
                         </div>
                     </div>
                     <!-- 修改网格布局以适应大一些的横向卡片 -->
@@ -429,5 +414,9 @@
     <!-- 版本检测脚本 -->
     <!-- 添加弹窗和URL搜索参数处理脚本 -->
     <script src="js/index-page.js"></script>
+    <!-- 首页源分类浏览（替代豆瓣热门） -->
+    <script src="js/browse.js"></script>
+    <!-- iOS 13.1 / Safari 13.1：aspect-ratio 兜底（新引擎自动跳过） -->
+    <script src="js/legacy-aspect.js"></script>
 </body>
 </html>

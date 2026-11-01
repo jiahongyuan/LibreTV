@@ -1,129 +1,93 @@
-// ⚠️ 本文件由 scripts/fetch-sources.mjs 自动生成，请勿手工修改。
-// 重新生成：npm run sources
-// 订阅来源：https://raw.githubusercontent.com/hafrey1/LunaTV-config/refs/heads/main/jin18.txt
-// 生成时间：2026-10-06T11:19:43.745Z（共 28 个源）
+// ⚠️ 本文件由精选源清单生成，请勿手工修改。
+// 生成时间：2026-10-31T03:22:23.532Z（共 20 个源）
+// 排序依据：两轮实测平均延迟（浏览器→CF 边缘→源站）
 
 const CUSTOMER_SITES = {
-    iqiyizyapi_com: {
-        api: "https://iqiyizyapi.com/api.php/provide/vod",
-        name: "🎬-爱奇艺-",
+    ikunzyapi_com: {
+        "api": "https://ikunzyapi.com/api.php/provide/vod",
+        "name": "iKun资源"
     },
-    dbzy_tv: {
-        api: "https://caiji.dbzy5.com/api.php/provide/vod",
-        name: "🎬豆瓣资源",
-    },
-    mtzy_me: {
-        api: "https://caiji.maotaizy.cc/api.php/provide/vod",
-        name: "🎬茅台资源",
-    },
-    wolongzyw_com: {
-        api: "https://wolongzyw.com/api.php/provide/vod",
-        name: "🎬卧龙资源",
-    },
-    ikunzy_com: {
-        api: "https://ikunzyapi.com/api.php/provide/vod",
-        name: "🎬iKun资源",
-    },
-    dyttzyapi_com: {
-        api: "http://caiji.dyttzyapi.com/api.php/provide/vod",
-        name: "🎬电影天堂",
-    },
-    www_maoyanzy_com: {
-        api: "https://api.maoyanapi.top/api.php/provide/vod",
-        name: "🎬猫眼资源",
-    },
-    cj_lzcaiji_com: {
-        api: "https://cj.lzcaiji.com/api.php/provide/vod",
-        name: "🎬量子资源",
-    },
-    _360zy_com: {
-        api: "https://360zyzz.com/api.php/provide/vod",
-        name: "🎬360 资源",
-    },
-    jszyapi_com: {
-        api: "https://jszyapi.com/api.php/provide/vod",
-        name: "🎬极速资源",
-    },
-    www_moduzy_net: {
-        api: "https://www.mdzyapi.com/api.php/provide/vod",
-        name: "🎬魔都资源",
-    },
-    ffzyapi_com: {
-        api: "https://api.ffzyapi.com/api.php/provide/vod",
-        name: "🎬非凡资源",
-    },
-    bfzy_tv: {
-        api: "https://bfzyapi.com/api.php/provide/vod",
-        name: "🎬暴风资源",
-    },
-    zuida_xyz: {
-        api: "https://api.zuidapi.com/api.php/provide/vod",
-        name: "🎬最大资源",
-    },
-    wujinzy_me: {
-        api: "https://api.wujinapi.me/api.php/provide/vod",
-        name: "🎬无尽资源",
-    },
-    xinlangapi_com: {
-        api: "https://api.xinlangapi.com/xinlangapi.php/provide/vod",
-        name: "🎬新浪资源",
-    },
-    api_wwzy_tv: {
-        api: "https://api.wwzy.tv/api.php/provide/vod",
-        name: "🎬旺旺资源",
-    },
-    www_subozy_com: {
-        api: "https://subocaiji.com/api.php/provide/vod",
-        name: "🎬速播资源",
-    },
-    jinyingzy_com: {
-        api: "https://jyzyapi.com/provide/vod/from/jinyingyun/at/json",
-        name: "🎬金鹰点播",
-    },
-    p2100_net: {
-        api: "https://p2100.net/api.php/provide/vod",
-        name: "🎬飘零资源",
-    },
-    api_ukuapi88_com: {
-        api: "https://api.ukuapi88.com/api.php/provide/vod",
-        name: "🎬U酷影视",
-    },
-    api_guangsuapi_com: {
-        api: "https://api.guangsuapi.com/api.php/provide/vod",
-        name: "🎬光速资源",
-    },
-    www_hongniuzy_com: {
-        api: "https://www.hongniuzy2.com/api.php/provide/vod",
-        name: "🎬红牛资源",
+    caiji_dyttzyapi_com: {
+        "api": "http://caiji.dyttzyapi.com/api.php/provide/vod",
+        "name": "电影天堂"
     },
     caiji_moduapi_cc: {
-        api: "https://caiji.moduapi.cc/api.php/provide/vod",
-        name: "🎬魔都动漫",
+        "api": "https://caiji.moduapi.cc/api.php/provide/vod",
+        "name": "魔都动漫"
     },
-    www_ryzyw_com: {
-        api: "https://cj.rycjapi.com/api.php/provide/vod",
-        name: "🎬如意资源",
+    api_guangsuapi_com: {
+        "api": "https://api.guangsuapi.com/api.php/provide/vod",
+        "name": "光速资源"
     },
-    www_haohuazy_com: {
-        api: "https://hhzyapi.com/api.php/provide/vod",
-        name: "🎬豪华资源",
+    www_hongniuzy2_com: {
+        "api": "https://www.hongniuzy2.com/api.php/provide/vod",
+        "name": "红牛资源"
     },
-    bdzy1_com: {
-        api: "https://api.apibdzy.com/api.php/provide/vod",
-        name: "🎬百度云zy",
+    api_ffzyapi_com: {
+        "api": "https://api.ffzyapi.com/api.php/provide/vod",
+        "name": "非凡资源"
     },
-    lovedan_net: {
-        api: "https://lovedan.net/api.php/provide/vod",
-        name: "🎬艾旦影视",
+    www_mdzyapi_com: {
+        "api": "https://www.mdzyapi.com/api.php/provide/vod",
+        "name": "魔都资源"
     },
+    jszyapi_com: {
+        "api": "https://jszyapi.com/api.php/provide/vod",
+        "name": "极速资源"
+    },
+    subocaiji_com: {
+        "api": "https://subocaiji.com/api.php/provide/vod",
+        "name": "速播资源"
+    },
+    hhzyapi_com: {
+        "api": "https://hhzyapi.com/api.php/provide/vod",
+        "name": "豪华资源"
+    },
+    www_huyaapi_com: {
+        "api": "https://www.huyaapi.com/api.php/provide/vod",
+        "name": "虎牙资源"
+    },
+    api_yzzy_api_com: {
+        "api": "https://api.yzzy-api.com/inc/apijson.php",
+        "name": "优质资源"
+    },
+    api_xinlangapi_com: {
+        "api": "https://api.xinlangapi.com/xinlangapi.php/provide/vod",
+        "name": "新浪资源"
+    },
+    _360zyzz_com: {
+        "api": "https://360zyzz.com/api.php/provide/vod",
+        "name": "360 资源"
+    },
+    api_maoyanapi_top: {
+        "api": "https://api.maoyanapi.top/api.php/provide/vod",
+        "name": "猫眼资源"
+    },
+    cj_rycjapi_com: {
+        "api": "https://cj.rycjapi.com/api.php/provide/vod",
+        "name": "如意资源"
+    },
+    api_apibdzy_com: {
+        "api": "https://api.apibdzy.com/api.php/provide/vod",
+        "name": "百度云zy"
+    },
+    cj_lzcaiji_com: {
+        "api": "https://cj.lzcaiji.com/api.php/provide/vod",
+        "name": "量子资源"
+    },
+    cj_lziapi_com: {
+        "api": "https://cj.lziapi.com/api.php/provide/vod",
+        "name": "量子影视"
+    },
+    api_ukuapi88_com: {
+        "api": "https://api.ukuapi88.com/api.php/provide/vod",
+        "name": "U酷影视"
+    }
 };
 
-// 默认勾选的源（订阅前若干个）
-window.DEFAULT_SELECTED_APIS = ["iqiyizyapi_com","dbzy_tv","mtzy_me","wolongzyw_com","ikunzy_com","dyttzyapi_com"];
+// 默认勾选：延迟最低的 8 个源
+const DEFAULT_SELECTED_APIS = ["ikunzyapi_com","caiji_dyttzyapi_com","caiji_moduapi_cc","api_guangsuapi_com","www_hongniuzy2_com","api_ffzyapi_com","www_mdzyapi_com","jszyapi_com"];
 
-// 调用全局方法合并
-if (window.extendAPISites) {
-    window.extendAPISites(CUSTOMER_SITES);
-} else {
-    console.error("错误：请先加载 config.js！");
-}
+// 合并到全局
+window.extendAPISites(CUSTOMER_SITES);
+window.DEFAULT_SELECTED_APIS = DEFAULT_SELECTED_APIS;

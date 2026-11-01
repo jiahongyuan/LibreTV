@@ -38,6 +38,8 @@ const COPY_FILES = [
   'player.html',
   'about.html',
   'watch.html',
+  'live.html',
+  'login.html',
   'manifest.json',
   'robots.txt',
   'VERSION.txt',

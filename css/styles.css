@@ -458,7 +458,7 @@ body {
 
 /* 成人内容API标记样式 */
 .api-adult + label {
-    color: #ff6b8b !important;
+    color: #9aa3ad !important;
 }
 
 /* 添加警告图标和标签样式 */
@@ -466,7 +466,7 @@ body {
     display: inline-flex;
     align-items: center;
     margin-left: 0.25rem;
-    color: #ff6b8b;
+    color: #6b7280;
 }
 
 .adult-warning svg {
@@ -495,7 +495,7 @@ body {
 }
 
 .api-group-title.adult {
-    color: #ff6b8b;
+    color: #8599b2;
 }
 
 /* 过滤器禁用样式 - 改进版本 */
@@ -530,7 +530,7 @@ body {
 
 /* 改进过滤器禁用样式 */
 .filter-disabled .filter-description {
-    color: #ff6b8b !important;
+    color: #9aa3ad !important;
     font-style: italic;
     font-weight: 500;
 }
@@ -629,7 +629,7 @@ body {
 .adult-tag {
     display: inline-flex;
     align-items: center;
-    color: #ff6b8b;
+    color: #6b7280;
     font-size: 0.7rem;
     font-weight: 500;
     margin-right: 0.35rem;

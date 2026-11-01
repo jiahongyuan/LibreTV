@@ -50,6 +50,9 @@ export async function onRequest(context) {
     const DEBUG_ENABLED = (env.DEBUG === 'true');
     const CACHE_TTL = parseInt(env.CACHE_TTL || '86400'); // 默认 24 小时
     const MAX_RECURSION = parseInt(env.MAX_RECURSION || '5'); // 默认 5 层
+    // ?raw=1：只过滤广告、不把分片改写成 /proxy/...，让播放器直连 CDN 拿分片
+    //（走代理转发 ts 会慢 3-5 倍，实测过）
+    const RAW_MODE = url.searchParams.get('raw') === '1';
     // 广告过滤已移至播放器处理，代理不再执行
     let USER_AGENTS = [ // 提供一个基础的默认值
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
@@ -197,11 +200,18 @@ export async function onRequest(context) {
     }
 
     // 创建 M3U8 类型的响应
-    function createM3u8Response(content) {
+    function createM3u8Response(content, isLive) {
+        // 直播清单没有 #EXT-X-ENDLIST，分片一直在滚动：
+        // 一旦按 CACHE_TTL 缓存，浏览器就会拿一份过期清单反复请求失效分片，画面直接停住。
         return createResponse(content, 200, {
-            "Content-Type": "application/vnd.apple.mpegurl", // M3U8 的标准 MIME 类型
-            "Cache-Control": `public, max-age=${CACHE_TTL}` // 允许浏览器和CDN缓存
+            "Content-Type": "application/vnd.apple.mpegurl",
+            "Cache-Control": isLive ? 'no-store, no-cache, must-revalidate' : `public, max-age=${CACHE_TTL}`
         });
+    }
+
+    // 直播判定：m3u8 里没有 #EXT-X-ENDLIST
+    function isLivePlaylist(text) {
+        return typeof text === 'string' && /#EXTINF/i.test(text) && !/#EXT-X-ENDLIST/i.test(text);
     }
 
     // 获取随机 User-Agent
@@ -275,6 +285,91 @@ export async function onRequest(context) {
     }
 
     // 获取远程内容及其类型
+    // 流式模式：分片/密钥这类"大或要立刻出首字节"的请求，不整块读进内存，
+    // 直接把上游的 ReadableStream 交给浏览器 —— 首字节时间从"整片下载完"降到"上游首包"。
+    const STREAM_RE = /\.(ts|m4s|mp4|m4a|mp3|aac|key|webm|flv|jpg|jpeg|png|webp)(\?|$)/i;
+
+    // 对冲：请求发出后 hedgeAfterMs 还没拿到响应头，就再发一份（换 UA），
+    // 谁先回来用谁，其余立即 abort。只在"慢"的时候才多花钱，
+    // 正常分片仍然只有一次上游请求。
+    async function fetchHedged(targetUrl, headers, { timeoutMs = 25000, hedgeAfterMs = 1200, maxHedges = 1, cf } = {}) {
+        const controllers = [];
+        let settled = false;
+        let pending = 0;
+        let lastErr = null;
+
+        const start = (i) =>
+            new Promise((resolve, reject) => {
+                const ctrl = new AbortController();
+                controllers.push(ctrl);
+                const timer = setTimeout(() => {
+                    try { ctrl.abort(); } catch {}
+                }, timeoutMs);
+                const h = new Headers(headers);
+                if (i > 0) h.set('User-Agent', getRandomUserAgent());
+                fetch(targetUrl, { headers: h, redirect: 'follow', signal: ctrl.signal, cf })
+                    .then((r) => {
+                        clearTimeout(timer);
+                        if (r.status === 429 || r.status >= 500) {
+                            try { ctrl.abort(); } catch {}
+                            reject(new Error(`HTTP ${r.status}`));
+                            return;
+                        }
+                        resolve({ r, ctrl });
+                    })
+                    .catch((e) => {
+                        clearTimeout(timer);
+                        reject(e);
+                    });
+            });
+
+        return new Promise((resolve, reject) => {
+            const launch = (i) => {
+                pending++;
+                start(i)
+                    .then(({ r, ctrl }) => {
+                        if (settled) {
+                            try { ctrl.abort(); } catch {}
+                            return;
+                        }
+                        settled = true;
+                        // 赢家之外的全部掐掉，避免白占上游带宽
+                        for (const c of controllers) {
+                            if (c !== ctrl) { try { c.abort(); } catch {} }
+                        }
+                        resolve(r);
+                    })
+                    .catch((e) => {
+                        lastErr = e;
+                        pending--;
+                        if (!settled && pending === 0) reject(lastErr);
+                    });
+            };
+
+            launch(0);
+            for (let i = 1; i <= maxHedges; i++) {
+                setTimeout(() => { if (!settled) launch(i); }, hedgeAfterMs * i);
+            }
+        });
+    }
+
+    async function fetchWithRetry(targetUrl, headers, { attempts = 3, timeoutMs = 20000, cf } = {}) {
+        let lastErr = null;
+        for (let i = 0; i < attempts; i++) {
+            try {
+                // 最后一轮不再对冲，老老实实等一次完整响应
+                const hedge = i < attempts - 1
+                    ? { hedgeAfterMs: Number(env.HEDGE_AFTER_MS || 1200), maxHedges: 1 }
+                    : { hedgeAfterMs: 0, maxHedges: 0 };
+                return await fetchHedged(targetUrl, headers, { timeoutMs, cf, ...hedge });
+            } catch (e) {
+                lastErr = e;
+                if (i < attempts - 1) await new Promise((res) => setTimeout(res, 200 * (i + 1)));
+            }
+        }
+        throw lastErr || new Error('fetch failed');
+    }
+
     async function fetchContentWithType(targetUrl) {
         const headers = new Headers({
             'User-Agent': getRandomUserAgent(),
@@ -284,17 +379,33 @@ export async function onRequest(context) {
             // Referer：豆瓣等有防盗链的站点需要固定的 Referer
             'Referer': getUpstreamReferer(targetUrl)
         });
+        // 透传 Range：Safari 原生播放会对分片发字节范围请求，
+        // 不透传就只能整片回，既费流量又拖慢起播
+        const clientRange = request.headers.get('Range');
+        if (clientRange) headers.set('Range', clientRange);
+
+        const isStream = STREAM_RE.test(targetUrl);
+        // 分片交给 Cloudflare 边缘缓存：同一片第二次请求（重看、拖回、多设备）不再回源
+        const cfOpts = isStream ? { cacheEverything: true, cacheTtl: 86400, cacheKey: targetUrl } : undefined;
 
         try {
-            // 直接请求目标 URL
-            logDebug(`开始直接请求: ${targetUrl}`);
-            // Cloudflare Functions 的 fetch 默认支持重定向
-            const response = await fetch(targetUrl, { headers, redirect: 'follow' });
+            logDebug(`开始请求: ${targetUrl}${isStream ? '（流式）' : ''}`);
+            const response = await fetchWithRetry(targetUrl, headers, {
+                attempts: isStream ? 3 : 2,
+                timeoutMs: isStream ? 25000 : 12000,
+                cf: cfOpts,
+            });
 
             if (!response.ok) {
-                 const errorBody = await response.text().catch(() => '');
-                 logDebug(`请求失败: ${response.status} ${response.statusText} - ${targetUrl}`);
-                 throw new Error(`HTTP error ${response.status}: ${response.statusText}. URL: ${targetUrl}. Body: ${errorBody.substring(0, 150)}`);
+                const errorBody = await response.text().catch(() => '');
+                logDebug(`请求失败: ${response.status} ${response.statusText} - ${targetUrl}`);
+                throw new Error(`HTTP error ${response.status}: ${response.statusText}. URL: ${targetUrl}. Body: ${errorBody.substring(0, 150)}`);
+            }
+
+            if (isStream && response.body) {
+                const contentType = response.headers.get('Content-Type') || 'application/octet-stream';
+                logDebug(`流式透传: ${targetUrl} (${contentType})`);
+                return { stream: response.body, contentType, isBinary: true, responseHeaders: response.headers, status: response.status };
             }
 
             // 读取响应内容：图片/音视频等二进制内容必须按字节透传，
@@ -360,42 +471,90 @@ export async function onRequest(context) {
      }
 
     // 处理媒体 M3U8 播放列表 (包含视频/音频片段)
+    // 顺带做「切片广告」过滤：只删两类高置信广告分片，避免误伤正片
+    //   ① URI 里出现 ad / ads / adv / guanggao / gg / promo / sponsor 之类的独立段
+    //   ② 时长明显异常（> max(15s, 3×中位时长)）且前后都是 DISCONTINUITY 的孤立长片段
+    // 放在代理层做，是因为 iPad 走原生 HLS，前端的 hls.js loader 根本不会执行。
     function processMediaPlaylist(url, content) {
         const baseUrl = getBaseUrl(url);
-        const lines = content.split('\n');
-        const output = [];
+        const rawLines = content.split('\n').map(function (l) { return l.trim(); }).filter(function (l) { return l !== ''; });
 
-        for (let i = 0; i < lines.length; i++) {
-            const line = lines[i].trim();
-            // 保留最后的空行
-            if (!line && i === lines.length - 1) {
-                output.push(line);
-                continue;
-            }
-            if (!line) continue; // 跳过中间的空行
-
-            if (line.startsWith('#EXT-X-KEY')) {
-                output.push(processKeyLine(line, baseUrl));
-                continue;
-            }
-            if (line.startsWith('#EXT-X-MAP')) {
-                output.push(processMapLine(line, baseUrl));
-                 continue;
-            }
-             if (line.startsWith('#EXTINF')) {
-                 output.push(line);
-                 continue;
-             }
-             if (!line.startsWith('#')) {
-                 const absoluteUrl = resolveUrl(baseUrl, line);
-                 logDebug(`重写媒体片段: 原始='${line}', 绝对='${absoluteUrl}'`);
-                 output.push(rewriteUrlToProxy(absoluteUrl));
-                 continue;
-             }
-             // 其他 M3U8 标签直接添加
-             output.push(line);
+        // ① 解析成条目（把 EXTINF 和它后面的 URI 绑在一起，才能整段删除）
+        const items = [];
+        let pendingInf = null;
+        for (let i = 0; i < rawLines.length; i++) {
+            const line = rawLines[i];
+            if (line.startsWith('#EXTINF')) { pendingInf = line; continue; }
+            if (line.startsWith('#EXT-X-DISCONTINUITY')) { items.push({ kind: 'disc' }); continue; }
+            if (line.startsWith('#')) { items.push({ kind: 'tag', text: line }); continue; }
+            const dur = pendingInf ? parseFloat(pendingInf.slice(8)) : null;
+            items.push({ kind: 'seg', inf: pendingInf, dur: isNaN(dur) ? null : dur, uri: line });
+            pendingInf = null;
         }
-        return output.join('\n');
+
+        // ② 中位时长，用于判定「异常长片段」
+        const durs = items.filter(function (it) { return it.kind === 'seg' && it.dur; })
+            .map(function (it) { return it.dur; }).sort(function (a, b) { return a - b; });
+        const median = durs.length ? durs[Math.floor(durs.length / 2)] : 0;
+        const adDurThreshold = Math.max(15, median * 3);
+
+        const AD_URI_RE = /(^|[\/_.\-])(ad|ads|adv|advert|adver|guanggao|gg|promo|sponsor)([\/_.\-]|$)/i;
+        const isAd = items.map(function (it, idx) {
+            if (it.kind !== 'seg') return false;
+            if (AD_URI_RE.test(it.uri)) return true;
+            if (it.dur && it.dur > adDurThreshold) {
+                const prev = items[idx - 1];
+                const next = items[idx + 1];
+                const prevBoundary = !prev || prev.kind === 'disc';
+                const nextBoundary = !next || next.kind === 'disc';
+                if (prevBoundary && nextBoundary) return true;
+            }
+            return false;
+        });
+
+        // ③ 输出（同时重写 KEY / MAP / 分片地址）
+        const output = [];
+        let removed = 0;
+        for (let i = 0; i < items.length; i++) {
+            const it = items[i];
+            if (it.kind === 'disc') { output.push('#EXT-X-DISCONTINUITY'); continue; }
+            if (it.kind === 'tag') {
+                let t = it.text;
+                if (t.startsWith('#EXT-X-KEY') || t.startsWith('#EXT-X-MAP')) {
+                    if (RAW_MODE) {
+                        // 只把相对地址绝对化，保留原始 CDN 地址
+                        t = t.replace(/URI="([^"]+)"/, function (m, uri) {
+                            return 'URI="' + resolveUrl(baseUrl, uri) + '"';
+                        });
+                    } else if (t.startsWith('#EXT-X-KEY')) {
+                        t = processKeyLine(t, baseUrl);
+                    } else {
+                        t = processMapLine(t, baseUrl);
+                    }
+                }
+                output.push(t);
+                continue;
+            }
+            if (isAd[i]) { removed++; continue; }
+            if (it.inf) output.push(it.inf);
+            const absoluteUrl = resolveUrl(baseUrl, it.uri);
+            output.push(RAW_MODE ? absoluteUrl : rewriteUrlToProxy(absoluteUrl));
+        }
+
+        // ④ 清理删广告后留下的孤立/重复 DISCONTINUITY（首尾和连续出现的都去掉）
+        const cleaned = [];
+        for (let i = 0; i < output.length; i++) {
+            const line = output[i];
+            if (line === '#EXT-X-DISCONTINUITY') {
+                const prev = cleaned[cleaned.length - 1];
+                if (!prev || prev === '#EXT-X-DISCONTINUITY' || prev.startsWith('#EXTM3U')) continue;
+                if (i === output.length - 1) continue;
+            }
+            cleaned.push(line);
+        }
+
+        if (removed > 0) logDebug(`切片广告过滤：删除 ${removed} 个分片 (${url})`);
+        return cleaned.join('\n');
     }
 
     // 递归处理 M3U8 内容
@@ -416,8 +575,7 @@ export async function onRequest(context) {
 
         const baseUrl = getBaseUrl(url);
         const lines = content.split('\n');
-        let highestBandwidth = -1;
-        let bestVariantUrl = '';
+        const variants = [];
 
         for (let i = 0; i < lines.length; i++) {
             if (lines[i].startsWith('#EXT-X-STREAM-INF')) {
@@ -434,11 +592,20 @@ export async function onRequest(context) {
                      }
                  }
 
-                 if (variantUriLine && currentBandwidth >= highestBandwidth) {
-                     highestBandwidth = currentBandwidth;
-                     bestVariantUrl = resolveUrl(baseUrl, variantUriLine);
+                 if (variantUriLine) {
+                     variants.push({ bw: currentBandwidth, url: resolveUrl(baseUrl, variantUriLine) });
                  }
             }
+        }
+
+        // ⚠️ 不要锁最高码率：代理把 master 展开成单个 media playlist 后，
+        // 客户端就失去了 ABR 能力。实测锁最高码率在弱网下必卡。
+        // 取带宽中位数（既不清也不至于打满带宽）。
+        let bestVariantUrl = '';
+        if (variants.length) {
+            variants.sort(function (a, b) { return a.bw - b.bw; });
+            const pick = variants[Math.floor((variants.length - 1) / 2)];
+            bestVariantUrl = pick.url;
         }
 
          if (!bestVariantUrl) {
@@ -530,6 +697,31 @@ export async function onRequest(context) {
 
         logDebug(`收到代理请求: ${targetUrl}`);
 
+        // --- 边缘缓存（Cache API）---
+        // 采集站的 JSON 接口（搜索/分类/详情）是纯读、同一关键词会被反复请求
+        // （首页「最新」、翻页、切分类、多人重复搜同一部片）。
+        // 放在边缘缓存 60 秒，重复请求不再回源；视频分片与 m3u8 不缓存。
+        const isJsonApi = /[?&]ac=(videolist|class|detail|list)(&|=|$)/i.test(targetUrl);
+        const edgeCacheable = isJsonApi && request.method === 'GET';
+        let edgeCacheKey = null;
+        if (edgeCacheable) {
+            edgeCacheKey = new Request('https://edge-cache.invalid/' + encodeURIComponent(targetUrl));
+            try {
+                const hit = await caches.default.match(edgeCacheKey);
+                if (hit) {
+                    const body = await hit.text();
+                    logDebug(`边缘缓存命中: ${targetUrl}`);
+                    return createResponse(body, 200, {
+                        'Content-Type': 'application/json; charset=utf-8',
+                        'Cache-Control': 'public, max-age=60',
+                        'X-Edge-Cache': 'HIT'
+                    });
+                }
+            } catch (cacheErr) {
+                logDebug(`边缘缓存读取失败: ${cacheErr.message}`);
+            }
+        }
+
         // --- 缓存检查 (KV) ---
         const cacheKey = `proxy_raw:${targetUrl}`; // 使用原始内容的缓存键
         let kvNamespace = null;
@@ -555,7 +747,7 @@ export async function onRequest(context) {
                     if (isM3u8Content(content, contentType)) {
                         logDebug(`缓存内容是 M3U8，重新处理: ${targetUrl}`);
                         const processedM3u8 = await processM3u8Content(targetUrl, content, 0, env);
-                        return createM3u8Response(processedM3u8);
+                        return createM3u8Response(processedM3u8, isLivePlaylist(content));
                     } else {
                         logDebug(`从缓存返回非 M3U8 内容: ${targetUrl}`);
                         return createResponse(content, 200, new Headers(headers));
@@ -570,11 +762,28 @@ export async function onRequest(context) {
         }
 
         // --- 实际请求 ---
-        const { content, contentType, isBinary, responseHeaders } = await fetchContentWithType(targetUrl);
+        const { content, contentType, isBinary, responseHeaders, stream, status: upstreamStatus } = await fetchContentWithType(targetUrl);
+
+        // --- 流式透传：分片/密钥直接边下边发，首字节不用等整片 ---
+        if (stream) {
+            const sh = new Headers();
+            for (const k of ['content-type', 'content-length', 'content-range', 'accept-ranges', 'etag', 'last-modified']) {
+                const v = responseHeaders.get(k);
+                if (v) sh.set(k, v);
+            }
+            if (!sh.has('content-type')) sh.set('content-type', contentType || 'application/octet-stream');
+            sh.set('Cache-Control', `public, max-age=${CACHE_TTL}`);
+            sh.set('Access-Control-Allow-Origin', '*');
+            sh.set('Access-Control-Allow-Methods', 'GET, HEAD, POST, OPTIONS');
+            sh.set('Access-Control-Allow-Headers', '*');
+            sh.set('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges');
+            return new Response(stream, { status: upstreamStatus || 200, headers: sh });
+        }
 
         // --- 写入缓存 (KV) ---
         // 二进制内容（图片等）不写入 KV：一是 JSON 序列化会破坏字节，二是体积大且无必要
-        if (kvNamespace && !isBinary) {
+        const liveList = isM3u8Content(content, contentType) && isLivePlaylist(content);
+        if (kvNamespace && !isBinary && !liveList) {
              try {
                  const headersToCache = {};
                  responseHeaders.forEach((value, key) => { headersToCache[key.toLowerCase()] = value; });
@@ -592,16 +801,35 @@ export async function onRequest(context) {
         if (isM3u8Content(content, contentType)) {
             logDebug(`内容是 M3U8，开始处理: ${targetUrl}`);
             const processedM3u8 = await processM3u8Content(targetUrl, content, 0, env);
-            return createM3u8Response(processedM3u8);
+            return createM3u8Response(processedM3u8, isLivePlaylist(content));
         } else {
             logDebug(`内容不是 M3U8 (类型: ${contentType})，直接返回: ${targetUrl}`);
             const finalHeaders = new Headers(responseHeaders);
-            finalHeaders.set('Cache-Control', `public, max-age=${CACHE_TTL}`);
+            // ⚠️ 采集站返回 JSON 但 Content-Type 常常是 text/html，
+            // 不能只按 Content-Type 判断，要结合目标 URL 的 ac= 参数。
+            const isJsonResp = /json/i.test(contentType || '') || (isJsonApi && !isBinary);
+            finalHeaders.set('Cache-Control', isJsonResp ? 'public, max-age=60' : `public, max-age=${CACHE_TTL}`);
             // 添加 CORS 头，确保非 M3U8 内容也能跨域访问（例如图片、字幕文件等）
             finalHeaders.set("Access-Control-Allow-Origin", "*");
             finalHeaders.set("Access-Control-Allow-Methods", "GET, HEAD, POST, OPTIONS");
             finalHeaders.set("Access-Control-Allow-Headers", "*");
-            return createResponse(content, 200, finalHeaders);
+            const finalResponse = createResponse(content, 200, finalHeaders);
+
+            // 写回边缘缓存（只缓存 JSON 文本，不缓存二进制）
+            if (edgeCacheKey && isJsonResp && !isBinary) {
+                try {
+                    waitUntil(caches.default.put(edgeCacheKey, new Response(content, {
+                        headers: {
+                            'Content-Type': 'application/json; charset=utf-8',
+                            'Cache-Control': 'public, max-age=60'
+                        }
+                    })));
+                    logDebug(`已写入边缘缓存: ${targetUrl}`);
+                } catch (cacheErr) {
+                    logDebug(`边缘缓存写入失败: ${cacheErr.message}`);
+                }
+            }
+            return finalResponse;
         }
 
     } catch (error) {

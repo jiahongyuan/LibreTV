@@ -207,3 +207,9 @@
         grid-template-columns: repeat(4, 1fr);
     }
 }
+
+/* 搜索状态下收紧搜索区上下留白（search() 会给 #searchArea 加 mb-8） */
+#searchArea.mb-8 {
+    padding-top: 0;
+    padding-bottom: 1rem;
+}

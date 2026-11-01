@@ -587,7 +587,9 @@ function resetToHome() {
 }
 
 // 加载豆瓣首页内容
-document.addEventListener('DOMContentLoaded', initDouban);
+// 首页已改为「源分类浏览」（js/browse.js），豆瓣热门不再渲染。
+// 保留 initDouban 供设置面板复用，但不自动执行。
+// document.addEventListener('DOMContentLoaded', initDouban);
 
 // 显示标签管理模态框
 function showTagManageModal() {

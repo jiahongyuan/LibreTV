@@ -397,6 +397,402 @@ function showShortcutHint(text, direction) {
 }
 
 // 初始化播放器
+// 判断播放列表里是否有「切片广告」特征（与代理端 rules 保持一致）
+function analyzePlaylistForAds(text) {
+    const lines = String(text || '').split('\n').map(function (l) { return l.trim(); }).filter(Boolean);
+    const segs = [];
+    let dur = null;
+    for (let i = 0; i < lines.length; i++) {
+        const l = lines[i];
+        if (l.indexOf('#EXTINF:') === 0) { dur = parseFloat(l.slice(8)); continue; }
+        if (l.charAt(0) === '#') {
+            if (l === '#EXT-X-DISCONTINUITY') segs.push({ disc: true });
+            continue;
+        }
+        if (dur !== null) { segs.push({ dur: dur, uri: l }); dur = null; }
+    }
+    const AD_URI_RE = /(^|[\/_.\-])(ad|ads|adv|advert|guanggao|gg|promo|sponsor)([\/_.\-]|$)/i;
+    for (let i = 0; i < segs.length; i++) {
+        const it = segs[i];
+        if (it.disc) continue;
+        if (AD_URI_RE.test(it.uri)) return true;
+    }
+    const durs = segs.filter(function (x) { return x.dur; }).map(function (x) { return x.dur; }).sort(function (a, b) { return a - b; });
+    const median = durs.length ? durs[Math.floor(durs.length / 2)] : 0;
+    const threshold = Math.max(15, median * 3);
+    for (let i = 0; i < segs.length; i++) {
+        const it = segs[i];
+        if (it.disc || !it.dur || it.dur <= threshold) continue;
+        const prev = segs[i - 1];
+        const next = segs[i + 1];
+        const prevBoundary = !prev || prev.disc;
+        const nextBoundary = !next || next.disc;
+        if (prevBoundary && nextBoundary) return true;
+    }
+    return false;
+}
+
+// 带 6 秒超时的文本拉取（不用 AbortSignal.timeout，Safari 13.1 没有）
+function fetchPlaylistText(url) {
+    return new Promise(function (resolve, reject) {
+        var controller = new AbortController();
+        var timer = setTimeout(function () { controller.abort(); }, 6000);
+        fetch(url, { signal: controller.signal }).then(function (r) {
+            clearTimeout(timer);
+            if (!r.ok) { reject(new Error('HTTP ' + r.status)); return; }
+            r.text().then(resolve, reject);
+        }).catch(function (e) { clearTimeout(timer); reject(e); });
+    });
+}
+
+// 预取首个分片：起播时播放器还要再等一个 RTT 才拿到第一片，
+// 提前 fetch 一次能命中浏览器缓存并预热 CDN 连接
+function prefetchFirstSegment(text, baseUrl) {
+    var lines = String(text || '').split('\n');
+    for (var i = 0; i < lines.length; i++) {
+        var l = lines[i].trim();
+        if (!l || l.charAt(0) === '#') continue;
+        if (/\.(ts|m4s|mp4|aac|m4a)(\?|$)/i.test(l)) {
+            try {
+                var u = new URL(l, baseUrl).toString();
+                fetch(u, { cache: 'force-cache' }).catch(function () {});
+            } catch (e) { /* 忽略 */ }
+            return;
+        }
+    }
+}
+
+// 从 master playlist 里挑一个变体（取最高带宽）
+function pickVariantUrl(text, baseUrl) {
+    var lines = String(text).split('\n');
+    var best = null, bestBw = -1;
+    for (var i = 0; i < lines.length; i++) {
+        var l = lines[i].trim();
+        if (l.indexOf('#EXT-X-STREAM-INF') === 0) {
+            var m = l.match(/BANDWIDTH=(\d+)/);
+            var bw = m ? parseInt(m[1], 10) : 0;
+            for (var j = i + 1; j < lines.length; j++) {
+                var u = lines[j].trim();
+                if (u && u.charAt(0) !== '#') {
+                    if (bw >= bestBw) { bestBw = bw; best = u; }
+                    break;
+                }
+            }
+        }
+    }
+    if (!best) return null;
+    try { return new URL(best, baseUrl).toString(); } catch (e) { return null; }
+}
+
+// 只有真的含广告分片才走代理过滤；否则直接用原地址（无广告的源零额外延迟）
+async function buildAdFilteredUrl(url) {
+    if (typeof adFilteringEnabled !== 'undefined' && !adFilteringEnabled) return url;
+    if (!/^https?:\/\//i.test(url)) return url;
+    if (url.indexOf('/proxy/') === 0) return url;
+    try {
+        var text = await fetchPlaylistText(url);
+        if (/#EXT-X-STREAM-INF/.test(text)) {
+            var variant = pickVariantUrl(text, url);
+            if (!variant) return url;
+            text = await fetchPlaylistText(variant);
+        }
+        if (!analyzePlaylistForAds(text)) {
+            prefetchFirstSegment(text, url);
+            return url;
+        }
+        return PROXY_URL + encodeURIComponent(url) + '?raw=1';
+    } catch (e) {
+        return url; // 探测失败就用原地址，不影响播放
+    }
+}
+
+// ===== 播放器 HUD：当前源 + 实时速度（MB/s）=====
+// 速度用"滚动 5 秒窗口"统计真实字节数，而不是每秒取一次瞬时值——
+// HLS 是分片下载：一片几秒下完，然后可能空闲，瞬时值会长期显示 0.00。
+// 同时记录最近一个分片自身的下载速率，作为"当前这一片有多快"的即时读数。
+let netHudEl = null;
+let netHudSamples = [];      // {t, bytes} 最近 5 秒的字节采样
+let netHudSpeed = 0;
+let netHudTimer = null;
+let netHudObserved = false;
+let netHudBitrate = 0;       // 字节/秒，原生播放时用缓冲增长估算
+let netHudLastBufEnd = 0;
+let netHudWatching = false;
+let netHudDim = false;
+let netHudCalibrating = false;
+let netHudZeroTicks = 0;
+let netHudProbeUrl = '';
+let netHudProbing = false;
+let netHudLastProbe = 0;
+let netHudLastGood = 0;
+let netHudCalibAt = 0;
+let netHudStuck = 0;      // 最近一次测到的非零速度，缓冲满时显示它
+let netHudFragSpeed = 0;     // 最近一个分片的下载速率（MB/s）
+let netHudFragAt = 0;
+const NET_HUD_WINDOW_MS = 5000;
+const NET_HUD_DEBUG = /[?&]huddebug=1/.test(location.search);
+
+function netHudSourceName() {
+    try {
+        const key = new URLSearchParams(window.location.search).get('source') || '';
+        if (key && typeof API_SITES !== 'undefined' && API_SITES[key]) {
+            return API_SITES[key].name || key;
+        }
+        return key || '未知源';
+    } catch (e) {
+        return '未知源';
+    }
+}
+
+function ensureNetHud() {
+    if (netHudEl && document.body.contains(netHudEl)) return netHudEl;
+    const host = document.querySelector('#player .art-video-player') ||
+        document.getElementById('player') ||
+        document.body;
+    try {
+        if (getComputedStyle(host).position === 'static') host.style.position = 'relative';
+    } catch (e) {}
+    const el = document.createElement('div');
+    el.id = 'net-hud';
+    el.style.cssText = [
+        'position:absolute', 'right:14px', 'top:14px', 'z-index:60',
+        'padding:8px 14px', 'border-radius:13px',
+        'background:rgba(0,0,0,.55)', 'color:#e8eaed',
+        'font:18px/1.4 -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif',
+        'pointer-events:none', 'white-space:nowrap',
+        'text-shadow:0 1px 2px rgba(0,0,0,.6)'
+    ].join(';');
+    el.innerHTML = '<div id="net-hud-src" style="opacity:.85"></div>' +
+        '<div><span id="net-hud-spd" style="color:#4ade80;font-weight:600">0.00</span>' +
+        '<span style="opacity:.7"> MB/s</span>' +
+        '<span id="net-hud-note" style="opacity:.55;font-size:12.5px;margin-left:6px"></span></div>' +
+        (NET_HUD_DEBUG ? '<div id="net-hud-dbg" style="opacity:.6;font-size:10.5px"></div>' : '');
+    host.appendChild(el);
+    netHudEl = el;
+    return el;
+}
+
+function netHudAddBytes(n) {
+    if (n > 0) netHudSamples.push({ t: performance.now(), bytes: n });
+}
+
+// 分片自身的下载速率：这一片下了多久、下了多少字节
+function netHudRecordFrag(stats) {
+    try {
+        if (!stats || !stats.loading) return;
+        const secs = (stats.loading.end - stats.loading.start) / 1000;
+        const bytes = stats.loaded || 0;
+        if (secs > 0.05 && bytes > 0) {
+            netHudFragSpeed = (bytes / 1048576) / secs;
+            netHudFragAt = performance.now();
+        }
+    } catch (e) {}
+}
+
+// 播放器每次 initPlayer 都会 art.destroy() + new Artplayer()，
+// .art-video-player 是全新元素：把 observer 绑在它上面，切集后就再也收不到
+// art-control-show 的变化，HUD 会一直亮着。所以 observer 必须绑在稳定的
+// #player 容器上（subtree），每次回调都重新查当前的播放器元素。
+let netHudObsTarget = null;
+let netHudHidden = false;
+
+function netHudPlayerEl() {
+    return document.querySelector('#player .art-video-player') ||
+        document.querySelector('.art-video-player');
+}
+
+function netHudSyncVisibility() {
+    if (!netHudEl) return;
+    const p = netHudPlayerEl();
+    // 进度条在 art-control-show（控制栏展开）或 art-hover（鼠标悬停）时可见
+    const show = p ? (p.classList.contains('art-control-show') || p.classList.contains('art-hover')) : true;
+    netHudHidden = !show;
+    netHudEl.style.transition = 'opacity .18s ease';
+    netHudEl.style.opacity = show ? (netHudDim ? '.75' : '1') : '0';
+}
+
+function netHudBindVisibility() {
+    const target = document.getElementById('player') || document.body;
+    if (netHudObsTarget === target) {
+        netHudSyncVisibility();
+        return;
+    }
+    netHudObsTarget = target;
+    try {
+        new MutationObserver(netHudSyncVisibility).observe(target, {
+            attributes: true, attributeFilter: ['class'], subtree: true, childList: true
+        });
+    } catch (e) {}
+    netHudSyncVisibility();
+}
+
+function netHudStart() {
+    ensureNetHud();
+    const srcEl = document.getElementById('net-hud-src');
+    if (srcEl) srcEl.textContent = '源 · ' + netHudSourceName();
+
+    netHudBindVisibility();
+
+    if (netHudTimer) return;
+
+    netHudTimer = setInterval(function () {
+        const now = performance.now();
+        const v = (typeof art !== 'undefined' && art) ? art.video : null;
+
+        // 原生播放（Safari/iOS）没有分片事件：用缓冲增长 × 码率补字节
+        let bufEnd = 0;
+        if (v && v.buffered && v.buffered.length) {
+            for (let i = 0; i < v.buffered.length; i++) {
+                if (v.currentTime >= v.buffered.start(i) - 1 && v.currentTime <= v.buffered.end(i) + 1) {
+                    bufEnd = v.buffered.end(i);
+                    break;
+                }
+            }
+        }
+        if (netHudBitrate > 0 && bufEnd > 0) {
+            const growth = Math.max(0, bufEnd - netHudLastBufEnd);
+            if (growth > 0) netHudAddBytes(growth * netHudBitrate);
+        }
+        if (bufEnd > 0) netHudLastBufEnd = bufEnd;
+
+        // 滚动窗口统计
+        netHudSamples = netHudSamples.filter(function (s) { return now - s.t <= NET_HUD_WINDOW_MS; });
+        const total = netHudSamples.reduce(function (a, s) { return a + s.bytes; }, 0);
+        let span = 5;
+        if (netHudSamples.length) {
+            span = Math.min(5, Math.max(1, (now - netHudSamples[0].t) / 1000));
+        }
+        let speed = total / span / 1048576;
+
+        // 刚下完一片时，用这一片自身的速率，读数更"即时"
+        if (now - netHudFragAt < 6000 && netHudFragSpeed > speed) speed = netHudFragSpeed;
+
+        netHudSpeed = speed;
+
+        const spdEl = document.getElementById('net-hud-spd');
+        const noteEl = document.getElementById('net-hud-note');
+        const paused = !v || v.paused;
+        if (speed >= 0.005) netHudLastGood = speed;
+        let shown = speed;
+        let note = '';
+        if (paused) {
+            shown = 0;
+            note = '已暂停';
+        } else if (speed < 0.005) {
+            shown = netHudLastGood;
+            note = '缓冲已满';
+        }
+        if (spdEl) spdEl.textContent = shown.toFixed(2);
+        // 长时间 0 且没在暂停：把关键状态直接写进 note，方便一眼定位
+        if (!paused && shown < 0.005) {
+            netHudStuck = (netHudStuck || 0) + 1;
+            if (netHudStuck > 20) {
+                note = '缓冲已满 · br=' + Math.round(netHudBitrate) + ' p=' + (netHudProbeUrl ? 1 : 0) +
+                    ' n=' + netHudSamples.length;
+            }
+        } else {
+            netHudStuck = 0;
+        }
+        if (noteEl) noteEl.textContent = note;
+        netHudDim = (note === '缓冲已满');
+        if (netHudEl) netHudEl.style.opacity = netHudHidden ? '0' : (netHudDim ? '.75' : '1');
+
+        if (NET_HUD_DEBUG) {
+            const dbg = document.getElementById('net-hud-dbg');
+            if (dbg) dbg.textContent = 'br=' + Math.round(netHudBitrate) + ' frag=' + netHudFragSpeed.toFixed(2) +
+                ' n=' + netHudSamples.length + ' t=' + Math.round(v ? v.currentTime : 0);
+        }
+
+        // 一直没有字节但视频在播 → 大概率是原生播放路径，去标定码率
+        // 标定失败（比如当时还拿不到 duration）10 秒后重试一次
+        if (!netHudBitrate && netHudCalibrating && netHudCalibAt && (now - netHudCalibAt > 10000)) {
+            netHudCalibrating = false;
+            netHudZeroTicks = 0;
+        }
+        if (!netHudBitrate && !netHudCalibrating && v && !v.paused && v.currentTime > 2) {
+            netHudZeroTicks++;
+            if (netHudZeroTicks >= 6) {
+                netHudCalibrating = true;
+                netHudCalibAt = now;
+                const u = String(currentVideoUrl || '');
+                if (/\.m3u8(\?|$)/i.test(u)) netHudCalibrate(u);
+                else netHudCalibrateProgressive(u);
+            }
+        } else if (total > 0) {
+            netHudZeroTicks = 0;
+        }
+
+        // 空闲（缓冲已满 / 原生播放拿不到字节）时，交给服务端实测这个源的真实速度。
+        // 浏览器端在 iOS 上既没有分片事件、Range 又可能被忽略，只有服务端能稳定测出来。
+        if (total === 0 && currentVideoUrl && v && !v.paused && !netHudProbing && (netHudLastProbe === 0 || now - netHudLastProbe > 20000)) {
+            netHudLastProbe = now;
+            netHudProbing = true;
+            fetch('/api/probe?u=' + encodeURIComponent(currentVideoUrl), { cache: 'no-store' })
+                .then(function (r) { return r.json(); })
+                .then(function (d) {
+                    if (d && d.ok && d.mbps > 0) {
+                        netHudFragSpeed = d.mbps;
+                        netHudFragAt = performance.now();
+                    }
+                })
+                .catch(function () {})
+                .finally(function () { netHudProbing = false; });
+        }
+    }, 500);
+}
+
+// 标定码率：取播放列表第一条分片，读它的字节数和时长
+async function netHudCalibrate(playlistUrl) {
+    if (!playlistUrl || netHudBitrate > 0) return;
+    try {
+        let text = await (await fetch(PROXY_URL + encodeURIComponent(playlistUrl))).text();
+        for (let depth = 0; depth < 2; depth++) {
+            const lines = text.split('\n');
+            const firstUri = lines.find(function (l) { return l.trim() && !l.trim().startsWith('#'); });
+            if (!firstUri) return;
+            if (/#EXT-X-STREAM-INF/i.test(text)) {
+                const u = firstUri.trim();
+                const next = u.startsWith('/proxy/') ? u : PROXY_URL + encodeURIComponent(new URL(u, playlistUrl).toString());
+                text = await (await fetch(next)).text();
+                continue;
+            }
+            let dur = 0;
+            for (let i = 0; i < lines.length; i++) {
+                if (lines[i].startsWith('#EXTINF:')) dur = parseFloat(lines[i].slice(8)) || 0;
+                const l = lines[i].trim();
+                if (!l || l.startsWith('#')) continue;
+                if (!dur) return;
+                netHudProbeUrl = l;
+                let size = 0;
+                const r = await fetch(l, { headers: { Range: 'bytes=0-0' } });
+                const cr = r.headers.get('content-range') || '';
+                size = Number(cr.split('/')[1]) || Number(r.headers.get('content-length')) || 0;
+                if (!size) {
+                    const full = await fetch(l);
+                    size = Number(full.headers.get('content-length')) || (await full.arrayBuffer()).byteLength;
+                }
+                if (size > 0) netHudBitrate = size / dur;
+                return;
+            }
+            return;
+        }
+    } catch (e) {}
+}
+
+// 非 HLS（直链 mp4 等）：用 Range 读总大小，配 duration 直接算码率
+async function netHudCalibrateProgressive(url) {
+    if (!url || netHudBitrate > 0) return;
+    try {
+        const p = PROXY_URL + encodeURIComponent(url);
+        netHudProbeUrl = p;
+        const r = await fetch(p, { headers: { Range: 'bytes=0-0' } });
+        const cr = r.headers.get('content-range') || '';
+        const total = Number(cr.split('/')[1]) || Number(r.headers.get('content-length')) || 0;
+        const dur = (art && art.video && art.video.duration) || 0;
+        if (total > 0 && dur > 0) netHudBitrate = total / dur;
+    } catch (e) {}
+}
+
 function initPlayer(videoUrl) {
     if (!videoUrl) {
         return
@@ -411,30 +807,50 @@ function initPlayer(videoUrl) {
     // 配置HLS.js选项
     const hlsConfig = {
         debug: false,
-        loader: adFilteringEnabled ? CustomHlsJsLoader : Hls.DefaultConfig.loader,
+        // 广告过滤已移到代理层，不再需要自定义 loader。
+        // ⚠️ 不能写 loader: Hls.DefaultConfig.loader —— 这份 hls.min.js 构建没有导出
+        // DefaultConfig（运行时是 undefined），会让 initPlayer 直接抛错、播放器卡在加载中。
         enableWorker: true,
         lowLatencyMode: false,
-        backBufferLength: 90,
-        maxBufferLength: 30,
-        maxMaxBufferLength: 60,
-        maxBufferSize: 30 * 1000 * 1000,
-        maxBufferHole: 0.5,
-        fragLoadingMaxRetry: 6,
-        fragLoadingMaxRetryTimeout: 64000,
-        fragLoadingRetryDelay: 1000,
-        manifestLoadingMaxRetry: 3,
-        manifestLoadingRetryDelay: 1000,
+        backBufferLength: 60,
+        // 点播场景把缓冲拉满：目标 120s / 上限 300s，扛得住 CDN 抖动
+        maxBufferLength: 120,
+        maxMaxBufferLength: 300,
+        maxBufferSize: 120 * 1000 * 1000,
+        maxBufferHole: 0.3,
+        startFragPrefetch: true,
+        capLevelToPlayerSize: true,
+        abrEwmaDefaultEstimate: 3000000,
+        abrBandWidthFactor: 0.9,
+        abrBandWidthUpFactor: 0.6,
+        fragLoadingMaxRetry: 8,
+        fragLoadingRetryDelay: 500,
+        fragLoadingMaxRetryTimeout: 30000,
+        manifestLoadingMaxRetry: 4,
         levelLoadingMaxRetry: 4,
-        levelLoadingRetryDelay: 1000,
-        startLevel: -1,
-        abrEwmaDefaultEstimate: 500000,
-        abrBandWidthFactor: 0.95,
-        abrBandWidthUpFactor: 0.7,
-        abrMaxWithRealBitrate: true,
-        stretchShortVideoTrack: true,
-        appendErrorMaxRetry: 5,  // 增加尝试次数
-        liveSyncDurationCount: 3,
-        liveDurationInfinity: false
+        appendErrorMaxRetry: 6,
+        // hls.js 1.6 的加载策略：首字节超时放宽，分片允许更长总时长
+        manifestLoadPolicy: {
+            default: {
+                maxTimeToFirstByteMs: 8000, maxLoadTimeMs: 20000,
+                timeoutRetry: { maxNumRetry: 2, retryDelayMs: 0, maxRetryDelayMs: 0 },
+                errorRetry: { maxNumRetry: 4, retryDelayMs: 1000, maxRetryDelayMs: 8000 }
+            }
+        },
+        playlistLoadPolicy: {
+            default: {
+                maxTimeToFirstByteMs: 8000, maxLoadTimeMs: 20000,
+                timeoutRetry: { maxNumRetry: 2, retryDelayMs: 0, maxRetryDelayMs: 0 },
+                errorRetry: { maxNumRetry: 4, retryDelayMs: 1000, maxRetryDelayMs: 8000 }
+            }
+        },
+        fragLoadPolicy: {
+            default: {
+                maxTimeToFirstByteMs: 10000, maxLoadTimeMs: 120000,
+                timeoutRetry: { maxNumRetry: 4, retryDelayMs: 0, maxRetryDelayMs: 0 },
+                errorRetry: { maxNumRetry: 6, retryDelayMs: 500, maxRetryDelayMs: 8000 }
+            }
+        }
     };
 
     // Create new ArtPlayer instance
@@ -489,21 +905,64 @@ function initPlayer(videoUrl) {
                 //   - iPhone / 旧款 iPad：Hls.isSupported() === false → 交由原生播放
                 //   - 桌面 Chrome / Firefox / 新版 Safari：保持原有 hls.js 逻辑
                 const nativeHlsType = video.canPlayType('application/vnd.apple.mpegurl');
-                if (!Hls.isSupported() && nativeHlsType) {
-                    video.src = url;
+                // Safari / iOS 优先走原生 HLS：Safari 的 MSE 不支持 MPEG-TS 分片，
+                // hls.js 会先「支持」再在 append 阶段失败重试，表现为长时间黑屏/卡顿。
+                // 原生播放器对 HLS 的缓冲与码率切换是系统级实现，最稳。
+                const isSafariLike = /^((?!chrome|android|crios|fxios).)*safari/i.test(navigator.userAgent)
+                    || /iPad|iPhone|iPod/.test(navigator.userAgent);
+                if ((isSafariLike || !Hls.isSupported()) && nativeHlsType) {
+                    video.preload = 'auto';
+                    video.setAttribute('playsinline', '');
+                    video.setAttribute('webkit-playsinline', '');
+                    // 先直连探测：只有真的含广告分片才走代理过滤，否则零额外延迟
+                    let currentPlayUrl = url;
                     video.addEventListener('loadedmetadata', function () {
                         const loading = document.getElementById('player-loading');
                         if (loading) loading.style.display = 'none';
                         video.play().catch(function () {});
                     });
-                    video.addEventListener('error', function () {
-                        const loading = document.getElementById('player-loading');
-                        const errorBox = document.getElementById('error');
-                        if (loading) loading.style.display = 'none';
-                        if (errorBox) {
-                            errorBox.style.display = 'block';
-                            errorBox.textContent = '当前浏览器无法播放该视频源';
+                    // 原生路径原本没有"播放成功就收起错误遮罩"的逻辑：
+                    // 一旦旧源收尾时弹过一次错误，遮罩就会一直盖在正在播放的画面上。
+                    video.addEventListener('playing', function () {
+                        const eb = document.getElementById('error');
+                        if (eb) {
+                            eb.style.display = 'none';
+                            eb.textContent = '';
                         }
+                        window.isSwitchingVideo = false;
+                    });
+                    video.addEventListener('error', function () {
+                        // 切集时旧源收尾会触发 error，但新一集往往已经开播；
+                        // 只处理"确实没在播"的错误，避免遮罩盖住正常播放的画面。
+                        if (window.isSwitchingVideo) return;
+                        if (!video.error) return;
+                        if (video.readyState >= 2) return;
+                        if (currentPlayUrl !== url) {
+                            currentPlayUrl = url;
+                            video.src = url;
+                            video.play().catch(function () {});
+                            return;
+                        }
+                        // 再等 1.5s 确认：真的起不来才显示错误
+                        setTimeout(function () {
+                            if (window.isSwitchingVideo) return;
+                            if (video.readyState >= 2 || !video.error) return;
+                            const loading = document.getElementById('player-loading');
+                            const errorBox = document.getElementById('error');
+                            if (loading) loading.style.display = 'none';
+                            if (errorBox) {
+                                errorBox.style.display = 'block';
+                                errorBox.textContent = '当前浏览器无法播放该视频源';
+                            }
+                        }, 1500);
+                    });
+                    buildAdFilteredUrl(url).then(function (playUrl) {
+                        currentPlayUrl = playUrl;
+                        video.src = playUrl;
+                        video.play().catch(function () {});
+                    }).catch(function () {
+                        currentPlayUrl = url;
+                        video.src = url;
                     });
                     return;
                 }
@@ -511,6 +970,7 @@ function initPlayer(videoUrl) {
                 // 创建新的HLS实例
                 const hls = new Hls(hlsConfig);
                 currentHls = hls;
+                window.__currentHls = hls; // 便于在控制台核对实际生效的配置
 
                 // 跟踪是否已经显示错误
                 let errorDisplayed = false;
@@ -520,10 +980,13 @@ function initPlayer(videoUrl) {
                 let playbackStarted = false;
                 // 跟踪视频是否出现bufferAppendError
                 let bufferAppendErrorCount = 0;
+                // 播放中途的致命错误计数（源站抖动时用来决定"重试"还是"放弃"）
+                let midFatalCount = 0;
 
                 // 监听视频播放事件
                 video.addEventListener('playing', function () {
                     playbackStarted = true;
+                    midFatalCount = 0; // 成功播放即清零，避免历史错误影响后续判断
                     document.getElementById('player-loading').style.display = 'none';
                     document.getElementById('error').style.display = 'none';
                 });
@@ -536,8 +999,17 @@ function initPlayer(videoUrl) {
                     }
                 });
 
-                hls.loadSource(url);
+                let hlsFilteredUrl = url;
+                let hlsFellBack = false;
                 hls.attachMedia(video);
+                buildAdFilteredUrl(url).then(function (playUrl) {
+                    hlsFilteredUrl = playUrl;
+                    hls.loadSource(playUrl);
+                    hls.startLoad();
+                }).catch(function () {
+                    hls.loadSource(url);
+                    hls.startLoad();
+                });
 
                 // enable airplay, from https://github.com/video-dev/hls.js/issues/5989
                 // 检查是否已存在source元素，如果存在则更新，不存在则创建
@@ -559,6 +1031,10 @@ function initPlayer(videoUrl) {
                 });
 
                 hls.on(Hls.Events.ERROR, function (event, data) {
+                    // 切集后旧实例还在收尾，它的报错与当前播放无关，直接丢掉
+                    if (window.__currentHls && hls !== window.__currentHls) {
+                        return;
+                    }
                     // 增加错误计数
                     errorCount++;
 
@@ -576,12 +1052,44 @@ function initPlayer(videoUrl) {
                         }
                     }
 
+                    // 播放中途的致命错误：先原地恢复，连续失败再重载播放列表
+                    // （以前只在"还没播起来"时处理，播到一半源站抽风就永远卡住）
+                    if (data.fatal && playbackStarted) {
+                        midFatalCount++;
+                        if (data.type === Hls.ErrorTypes.MEDIA_ERROR && midFatalCount <= 2) {
+                            hls.recoverMediaError();
+                            return;
+                        }
+                        if (midFatalCount <= 3) {
+                            const resumeAt = video.currentTime;
+                            hls.stopLoad();
+                            setTimeout(function () {
+                                hls.startLoad(resumeAt);
+                            }, 800 * midFatalCount);
+                            return;
+                        }
+                        showError('播放中断：源站持续无响应，正在换源');
+                        autoSwitchSource();
+                        return;
+                    }
+
                     // 如果是致命错误，且视频未播放
                     if (data.fatal && !playbackStarted) {
                         // 尝试恢复错误
                         switch (data.type) {
                             case Hls.ErrorTypes.NETWORK_ERROR:
-                                hls.startLoad();
+                                // 过滤后的地址拉不到（代理异常/源站拒绝），回退原始地址
+                                if (!hlsFellBack && hlsFilteredUrl !== url) {
+                                    hlsFellBack = true;
+                                    hls.loadSource(url);
+                                    hls.startLoad();
+                                } else if (errorCount <= 3) {
+                                    // 最多重试 3 次，别无限 startLoad 转圈
+                                    hls.startLoad();
+                                } else {
+                                    showError('该线路无法播放，正在换源');
+                                    autoSwitchSource();
+                                }
                                 break;
                             case Hls.ErrorTypes.MEDIA_ERROR:
                                 hls.recoverMediaError();
@@ -598,8 +1106,14 @@ function initPlayer(videoUrl) {
                 });
 
                 // 监听分段加载事件
-                hls.on(Hls.Events.FRAG_LOADED, function () {
+                hls.on(Hls.Events.FRAG_LOADED, function (event, data) {
                     document.getElementById('player-loading').style.display = 'none';
+                    try {
+                        const st = data && data.frag && data.frag.stats;
+                        const n = (st && st.loaded) || (data && data.payload && data.payload.byteLength) || 0;
+                        netHudAddBytes(n);
+                        netHudRecordFrag(st);
+                    } catch (e) { /* 统计失败不影响播放 */ }
                 });
 
                 // 监听级别加载事件
@@ -661,9 +1175,15 @@ function initPlayer(videoUrl) {
         }
     }
 
+    // 左上角 HUD：artplayer 构造完成后容器就已存在，直接挂上，
+    // 不依赖 'ready'（解码失败/格式不支持时 ready 可能永远不来）
+    try { netHudStart(); } catch (e) {}
+
     // 播放器加载完成后初始隐藏工具栏
     art.on('ready', () => {
         hideControls();
+        // 左上角 HUD：当前源 + 实时速度
+        try { netHudStart(); } catch (e) {}
     });
 
     // 全屏 Web 模式处理
@@ -737,6 +1257,23 @@ function initPlayer(videoUrl) {
     // 添加移动端长按三倍速播放功能
     setupLongPressSpeedControl();
 
+    // 自动连播预取：播到 75% 时把下一集的 m3u8 拉进浏览器缓存（几 KB），
+    // 切集时省掉一次往返；只预取播放列表，不预取分片（避免浪费流量）。
+    let prefetchedForIndex = -1;
+    if (art && art.video) {
+        art.video.addEventListener('timeupdate', function () {
+            if (!autoplayEnabled) return;
+            if (currentEpisodeIndex >= currentEpisodes.length - 1) return;
+            if (!art.video.duration || art.video.currentTime < art.video.duration * 0.75) return;
+            if (prefetchedForIndex === currentEpisodeIndex) return;
+            prefetchedForIndex = currentEpisodeIndex;
+            const nextUrl = currentEpisodes[currentEpisodeIndex + 1];
+            if (typeof nextUrl === 'string' && /^https?:\/\//i.test(nextUrl)) {
+                fetchPlaylistText(nextUrl).catch(function () {});
+            }
+        });
+    }
+
     // 视频播放结束事件
     art.on('video:ended', function () {
         videoHasEnded = true;
@@ -809,30 +1346,24 @@ class CustomHlsJsLoader extends Hls.DefaultConfig.loader {
     }
 }
 
-// 过滤可疑的广告内容
-function filterAdsFromM3U8(m3u8Content, strictMode = false) {
-    if (!m3u8Content) return '';
-
-    // 按行分割M3U8内容
-    const lines = m3u8Content.split('\n');
-    const filteredLines = [];
-
-    for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-
-        // 只过滤#EXT-X-DISCONTINUITY标识
-        if (!line.includes('#EXT-X-DISCONTINUITY')) {
-            filteredLines.push(line);
-        }
-    }
-
-    return filteredLines.join('\n');
+// 广告过滤已移到代理层（functions/proxy，?raw=1），这里不再改写 m3u8。
+// 原实现是删除所有 #EXT-X-DISCONTINUITY 行，会破坏时间轴（反而造成卡顿/跳帧），
+// 保留空实现仅为兼容 CustomHlsJsLoader 的调用。
+function filterAdsFromM3U8(m3u8Content) {
+    return m3u8Content || '';
 }
-
 
 // 显示错误
 function showError(message) {
-    // 在视频已经播放的情况下不显示错误
+    // 正在切集：旧实例销毁时的报错不该盖在新一集的画面上
+    if (window.isSwitchingVideo) {
+        return;
+    }
+    // 在视频已经播放的情况下不显示错误（用"真的在播"判断，比 currentTime>1 可靠：
+    // 切集后 currentTime 归零，旧逻辑会把遮罩盖到已经开播的新一集上）
+    if (art && art.video && (!art.video.paused && art.video.readyState >= 2)) {
+        return;
+    }
     if (art && art.video && art.video.currentTime > 1) {
         return;
     }
@@ -958,6 +1489,19 @@ function playEpisode(index) {
     currentUrl.searchParams.set('url', url);
     currentUrl.searchParams.delete('position');
     window.history.replaceState({}, '', currentUrl.toString());
+
+    // 切集保护：旧实例/旧源收尾时抛的 error 不该盖在新一集的画面上
+    window.isSwitchingVideo = true;
+    netHudBitrate = 0;
+    netHudCalibrating = false;
+    netHudZeroTicks = 0;
+    netHudLastBufEnd = 0;
+    clearTimeout(window.__switchGuardTimer);
+    window.__switchGuardTimer = setTimeout(function () { window.isSwitchingVideo = false; }, 15000);
+    const vEl = art && art.video;
+    if (vEl) {
+        vEl.addEventListener('playing', function () { window.isSwitchingVideo = false; }, { once: true });
+    }
 
     if (isWebkit) {
         initPlayer(url);
@@ -1632,6 +2176,56 @@ function formatSpeedDisplay(speedResult) {
     return `<span class="${className}">${icon} ${speed}ms${note}</span>`;
 }
 
+// 自动换源：当前线路彻底不可用时，找同名资源的下一条线路并切过去。
+// 只在一次播放会话里尝试一次，避免在两条烂线路之间来回跳。
+let autoSwitchedThisSession = false;
+async function autoSwitchSource() {
+    if (autoSwitchedThisSession) {
+        showError('播放中断：所有线路均不可用');
+        return;
+    }
+    autoSwitchedThisSession = true;
+    showToast('当前线路不可用，正在自动换源…', 'info');
+    const curSource = new URLSearchParams(window.location.search).get('source') || '';
+    try {
+        const pool = (Array.isArray(selectedAPIs) && selectedAPIs.length)
+            ? selectedAPIs
+            : Object.keys(API_SITES);
+        const keys = pool.filter((k) => String(k) !== String(curSource));
+        for (const key of keys) {
+            try {
+                const results = await searchByAPIAndKeyWord(key, currentVideoTitle);
+                if (!results || !results.length) continue;
+                const hit = results.find((r) => r.vod_name === currentVideoTitle) || results[0];
+                if (hit && hit.vod_id) {
+                    await switchToResource(key, hit.vod_id);
+                    return;
+                }
+            } catch (e) {
+                // 这条线路搜索失败，继续下一条
+            }
+        }
+        showError('播放中断：所有线路均不可用');
+    } catch (e) {
+        showError('播放中断：换源失败');
+    }
+}
+
+// 给任意 promise 加超时：慢源不会拖住整个列表
+function withTimeout(promise, ms, fallback) {
+    return new Promise(function (resolve) {
+        let settled = false;
+        const timer = setTimeout(function () {
+            if (!settled) { settled = true; resolve(fallback); }
+        }, ms);
+        Promise.resolve(promise).then(function (v) {
+            if (!settled) { settled = true; clearTimeout(timer); resolve(v); }
+        }).catch(function () {
+            if (!settled) { settled = true; clearTimeout(timer); resolve(fallback); }
+        });
+    });
+}
+
 async function showSwitchResourceModal() {
     const urlParams = new URLSearchParams(window.location.search);
     const currentSourceCode = urlParams.get('source');
@@ -1641,12 +2235,8 @@ async function showSwitchResourceModal() {
     const modalTitle = document.getElementById('modalTitle');
     const modalContent = document.getElementById('modalContent');
 
-    modalTitle.innerHTML = `<span class="break-words">${escapeHtml(currentVideoTitle)}</span>`;
-    modalContent.innerHTML = '<div style="text-align:center;padding:20px;color:#aaa;grid-column:1/-1;">正在加载资源列表...</div>';
-    modal.classList.remove('hidden');
-
-    // 搜索
-    const resourceOptions = selectedAPIs.map((curr) => {
+    // 资源列表
+    const resourceOptions = selectedAPIs.map(function (curr) {
         if (API_SITES[curr]) {
             return { key: curr, name: API_SITES[curr].name };
         }
@@ -1656,98 +2246,107 @@ async function showSwitchResourceModal() {
         }
         return { key: curr, name: '未知资源' };
     });
-    let allResults = {};
-    await Promise.all(resourceOptions.map(async (opt) => {
-        let queryResult = await searchByAPIAndKeyWord(opt.key, currentVideoTitle);
-        if (queryResult.length == 0) {
-            return 
-        }
-        // 优先取完全同名资源，否则默认取第一个
-        let result = queryResult[0]
-        queryResult.forEach((res) => {
-            if (res.vod_name == currentVideoTitle) {
-                result = res;
-            }
-        })
-        allResults[opt.key] = result;
-    }));
 
-    // 更新状态显示：开始速率测试
-    modalContent.innerHTML = '<div style="text-align:center;padding:20px;color:#aaa;grid-column:1/-1;">正在测试各资源速率...</div>';
+    modalTitle.innerHTML = `<span class="break-words">${escapeHtml(currentVideoTitle)}</span>`;
+    modalContent.innerHTML = `
+        <div class="flex items-center justify-between px-1 pb-3 text-xs text-gray-400">
+            <span id="switchStatus">正在搜索 ${resourceOptions.length} 个资源…</span>
+            <span id="switchCount">0/${resourceOptions.length}</span>
+        </div>
+        <div id="switchGrid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4"></div>`;
+    modal.classList.remove('hidden');
 
-    // 同时测试所有资源的速率
-    const speedResults = {};
-    await Promise.all(Object.entries(allResults).map(async ([sourceKey, result]) => {
-        if (result) {
-            speedResults[sourceKey] = await testVideoSourceSpeed(sourceKey, result.vod_id);
-        }
-    }));
+    const ready = [];
+    let done = 0;
 
-    // 对结果进行排序
-    const sortedResults = Object.entries(allResults).sort(([keyA, resultA], [keyB, resultB]) => {
-        // 当前播放的源放在最前面
-        const isCurrentA = String(keyA) === String(currentSourceCode) && String(resultA.vod_id) === String(currentVideoId);
-        const isCurrentB = String(keyB) === String(currentSourceCode) && String(resultB.vod_id) === String(currentVideoId);
-        
-        if (isCurrentA && !isCurrentB) return -1;
-        if (!isCurrentA && isCurrentB) return 1;
-        
-        // 其余按照速度排序，速度快的在前面（速度为-1表示失败，排到最后）
-        const speedA = speedResults[keyA]?.speed || 99999;
-        const speedB = speedResults[keyB]?.speed || 99999;
-        
-        if (speedA === -1 && speedB !== -1) return 1;
-        if (speedA !== -1 && speedB === -1) return -1;
-        if (speedA === -1 && speedB === -1) return 0;
-        
-        return speedA - speedB;
-    });
+    const isCurrent = function (entry) {
+        return String(entry.key) === String(currentSourceCode) &&
+            String(entry.result.vod_id) === String(currentVideoId);
+    };
 
-    // 渲染资源列表
-    let html = '<div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 p-4">';
-    
-    for (const [sourceKey, result] of sortedResults) {
-        if (!result) continue;
-        
-        // 修复 isCurrentSource 判断，确保类型一致
-        const isCurrentSource = String(sourceKey) === String(currentSourceCode) && String(result.vod_id) === String(currentVideoId);
-        const sourceName = resourceOptions.find(opt => opt.key === sourceKey)?.name || '未知资源';
-        const speedResult = speedResults[sourceKey] || { speed: -1, error: '未测试' };
-        
-        html += `
-            <div class="relative group ${isCurrentSource ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:scale-105 transition-transform'}" 
-                 ${!isCurrentSource ? `onclick="switchToResource('${sourceKey}', '${result.vod_id}')"` : ''}>
+    const cardHtml = function (entry) {
+        const cur = isCurrent(entry);
+        const sp = entry.speedResult;
+        const speedHtml = sp ? formatSpeedDisplay(sp)
+            : '<span class="speed-indicator medium">⏳ 测速中</span>';
+        return `
+            <div class="relative group ${cur ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:scale-105 transition-transform'}"
+                 ${!cur ? `onclick="switchToResource('${entry.key}', '${entry.result.vod_id}')"` : ''}>
                 <div class="aspect-[2/3] rounded-lg overflow-hidden bg-gray-800 relative">
-                    <img src="${result.vod_pic}" 
-                         alt="${result.vod_name}"
+                    <img src="${entry.result.vod_pic}"
+                         alt="${entry.result.vod_name}"
                          class="w-full h-full object-cover"
                          onerror="this.src='data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjNjY2IiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PHJlY3QgeD0iMyIgeT0iMyIgd2lkdGg9IjE4IiBoZWlnaHQ9IjE4IiByeD0iMiIgcnk9IjIiPjwvcmVjdD48cGF0aCBkPSJNMjEgMTV2NGEyIDIgMCAwIDEtMiAySDVhMiAyIDAgMCAxLTItMnYtNCI+PC9wYXRoPjxwb2x5bGluZSBwb2ludHM9IjE3IDggMTIgMyA3IDgiPjwvcG9seWxpbmU+PHBhdGggZD0iTTEyIDN2MTIiPjwvcGF0aD48L3N2Zz4='">
-                    
-                    <!-- 速率显示在图片右上角 -->
                     <div class="absolute top-1 right-1 speed-badge bg-black bg-opacity-75">
-                        ${formatSpeedDisplay(speedResult)}
+                        ${speedHtml}
                     </div>
                 </div>
                 <div class="mt-2">
-                    <div class="text-xs font-medium text-gray-200 truncate">${result.vod_name}</div>
-                    <div class="text-[10px] text-gray-400 truncate">${sourceName}</div>
+                    <div class="text-xs font-medium text-gray-200 truncate">${entry.result.vod_name}</div>
+                    <div class="text-[10px] text-gray-400 truncate">${entry.name}</div>
                     <div class="text-[10px] text-gray-500 mt-1">
-                        ${speedResult.episodes ? `${speedResult.episodes}集` : ''}
+                        ${sp && sp.episodes ? `${sp.episodes}集` : ''}
                     </div>
                 </div>
-                ${isCurrentSource ? `
+                ${cur ? `
                     <div class="absolute inset-0 flex items-center justify-center">
                         <div class="bg-blue-600 bg-opacity-75 rounded-lg px-2 py-0.5 text-xs text-white font-medium">
                             当前播放
                         </div>
                     </div>
                 ` : ''}
-            </div>
-        `;
-    }
-    
-    html += '</div>';
-    modalContent.innerHTML = html;
+            </div>`;
+    };
+
+    const renderGrid = function () {
+        const grid = document.getElementById('switchGrid');
+        if (!grid) return;
+        ready.sort(function (a, b) {
+            const ca = isCurrent(a), cb = isCurrent(b);
+            if (ca && !cb) return -1;
+            if (!ca && cb) return 1;
+            // 还没测出速度的排在已测出的后面（避免卡片来回跳）
+            const sa = a.speedResult ? (a.speedResult.speed === -1 ? 99998 : a.speedResult.speed) : 99999;
+            const sb = b.speedResult ? (b.speedResult.speed === -1 ? 99998 : b.speedResult.speed) : 99999;
+            return sa - sb;
+        });
+        grid.innerHTML = ready.map(cardHtml).join('');
+    };
+
+    // 每个源独立跑：搜到就先把卡片放出来，测完速再更新这一张
+    resourceOptions.forEach(function (opt) {
+        (async function () {
+            try {
+                const q = await withTimeout(searchByAPIAndKeyWord(opt.key, currentVideoTitle), 12000, null);
+                if (!q || !q.length) return;
+                let result = q[0];
+                q.forEach(function (res) { if (res.vod_name == currentVideoTitle) result = res; });
+                if (!result || !result.vod_id) return;
+
+                const entry = { key: opt.key, name: opt.name, result: result, speedResult: null };
+                ready.push(entry);
+                renderGrid();   // 先显示"测速中"
+
+                const sp = await withTimeout(testVideoSourceSpeed(opt.key, result.vod_id), 9000, { speed: -1, error: '超时' });
+                entry.speedResult = sp;
+                renderGrid();
+            } catch (e) {
+                // 单个源失败不影响其它
+            } finally {
+                done++;
+                const cnt = document.getElementById('switchCount');
+                if (cnt) cnt.textContent = `${done}/${resourceOptions.length}`;
+                if (done === resourceOptions.length) {
+                    const st = document.getElementById('switchStatus');
+                    if (st) st.textContent = ready.length ? `共 ${ready.length} 个可用资源` : '没有找到其它资源';
+                    if (!ready.length) {
+                        const grid = document.getElementById('switchGrid');
+                        if (grid) grid.innerHTML = '<div class="col-span-full text-center text-gray-400 py-8">没有找到同名资源</div>';
+                    }
+                }
+            }
+        })();
+    });
 }
 
 // 切换资源的函数

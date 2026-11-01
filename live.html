@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="referrer" content="same-origin">
+    <title>直播 · LibreTV</title>
+    <link rel="icon" href="image/logo.png">
+    <link rel="apple-touch-icon" href="image/logo-black.png">
+    <link rel="stylesheet" href="css/styles.css">
+    <link rel="stylesheet" href="css/player.css">
+    <link rel="stylesheet" href="css/tailwind.css">
+    <link rel="stylesheet" href="css/legacy-ios13.css">
+    <style>
+        body { background: #0b0c0e; }
+        .live-header {
+            display: flex; align-items: center; gap: 10px;
+            padding: 12px 16px; border-bottom: 1px solid #1e2126; background: #0b0c0e;
+        }
+        .live-header a { color: #9aa0a6; text-decoration: none; font-size: 14px; }
+        .live-header h1 { font-size: 16px; font-weight: 600; margin: 0; flex: 1; }
+        .live-header select {
+            background: #16181c; color: #e8eaed; border: 1px solid #2a2e35;
+            border-radius: 8px; padding: 6px 10px; font-size: 13px; max-width: 46vw;
+        }
+        .live-wrap { padding: 12px 16px 24px; }
+        #livePlayer { width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: 10px; overflow: hidden; }
+        .live-meta { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 2px 0; }
+        #liveNow { color: #e8eaed; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        #liveStatus { color: #6b7076; font-size: 12px; white-space: nowrap; }
+        .live-search {
+            width: 100%; margin: 10px 0 8px; background: #121417; color: #e8eaed;
+            border: 1px solid #24272d; border-radius: 9px; padding: 9px 12px; font-size: 13.5px;
+        }
+        .live-groups { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+        .live-chip {
+            background: #16181c; color: #b7bcc2; border: 1px solid #24272d;
+            border-radius: 999px; padding: 4px 11px; font-size: 12px; cursor: pointer;
+        }
+        .live-chip.active { background: #23ade5; border-color: #23ade5; color: #04121a; font-weight: 600; }
+        .live-list { display: flex; flex-direction: column; gap: 2px; }
+        .live-item {
+            display: flex; align-items: center; gap: 9px; width: 100%;
+            background: transparent; border: 0; border-radius: 8px;
+            padding: 7px 8px; color: #d6d9dd; text-align: left; cursor: pointer; font-size: 13.5px;
+        }
+        .live-item:hover { background: #16181c; }
+        .live-item.active { background: #12232b; color: #4fd1ff; }
+        .live-item.dead { opacity: .38; }
+        .live-item.dead .live-name::after { content: ' ✕'; color: #e05252; }
+        .live-item img { width: 26px; height: 26px; object-fit: contain; flex: 0 0 26px; }
+        .live-dot { width: 26px; height: 26px; flex: 0 0 26px; border-radius: 6px; background: #1c1f24; }
+        .live-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .live-empty { color: #6b7076; font-size: 13px; padding: 14px 4px; }
+        @media (max-width: 900px) {
+            .live-wrap { padding: 10px 12px 20px; }
+        }
+    </style>
+</head>
+<body class="page-bg text-white">
+    <div class="live-header">
+        <a href="/">← 返回</a>
+        <h1>📺 直播</h1>
+        <select id="liveSourceSel" aria-label="直播源"></select>
+    </div>
+
+    <div class="live-wrap">
+        <div class="watch-layout">
+            <div class="watch-main">
+                <div id="livePlayer"></div>
+                <div class="live-meta">
+                    <span id="liveNow">选择一个频道开始播放</span>
+                    <span id="liveStatus">准备中…</span>
+                </div>
+            </div>
+
+            <aside class="watch-side">
+                <div class="side-head">
+                    <span>频道</span>
+                    <button id="liveCheckBtn" onclick="checkVisibleChannels()"
+                            style="background:#16181c;border:1px solid #2a2e35;color:#9aa0a6;border-radius:8px;padding:3px 10px;font-size:12px;cursor:pointer">检测可用性</button>
+                </div>
+                <input id="liveSearch" class="live-search" type="search" placeholder="搜索频道…" oninput="filterLive(this.value)">
+                <div class="live-groups" id="liveGroups"></div>
+                <div class="episode-grid">
+                    <div class="live-list" id="liveList"></div>
+                </div>
+            </aside>
+        </div>
+    </div>
+
+    <script src="libs/artplayer.min.js"></script>
+    <script src="libs/hls.min.js"></script>
+    <script src="js/config.js"></script>
+    <script src="js/live.js"></script>
+</body>
+</html>

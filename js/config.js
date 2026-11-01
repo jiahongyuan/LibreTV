@@ -121,3 +121,14 @@ const CUSTOM_API_CONFIG = {
 
 // 隐藏内置黄色采集站API的变量
 const HIDE_BUILTIN_ADULT_APIS = false;
+
+// ===== 直播源 =====
+// 社区主流做法：订阅别人每天/每 6 小时自动扫描验证的 m3u 列表，
+// 本地只做解析 + 播放，不自己维护频道。
+// 注意：这些源大多是 http 的，必须经 /proxy 转成 https，否则 HTTPS 页面会被混合内容拦掉。
+const LIVE_SOURCES = [
+    { name: '央视/卫视（自动扫描）', url: 'https://live.zbds.top/tv/iptv4.m3u' },
+    { name: '备用线路（gh-proxy）', url: 'https://gh-proxy.com/raw.githubusercontent.com/vbskycn/iptv/refs/heads/master/tv/iptv4.m3u' },
+    { name: 'best-fan 分类源', url: 'https://raw.githubusercontent.com/best-fan/iptv-sources/main/cn_all.m3u8' },
+    { name: 'iptv-org 全球', url: 'https://iptv-org.github.io/iptv/index.m3u' }
+];

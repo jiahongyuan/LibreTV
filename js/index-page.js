@@ -78,3 +78,27 @@ document.addEventListener('DOMContentLoaded', function() {
         }, 300);
     }
 });
+
+// 搜索历史只在点击/聚焦搜索框时展开
+document.addEventListener('DOMContentLoaded', function () {
+    var input = document.getElementById('searchInput');
+    var box = document.getElementById('recentSearches');
+    if (!input || !box) return;
+
+    function show() { box.classList.remove('hidden'); }
+    function hide() { box.classList.add('hidden'); }
+
+    input.addEventListener('focus', show);
+    input.addEventListener('click', show);
+
+    // 点页面其他位置收起；点历史标签本身不收起（标签点击会触发搜索）
+    document.addEventListener('click', function (e) {
+        if (e.target === input) return;
+        // 点历史标签会立即触发搜索，收起历史但不影响这次点击
+        if (box.contains(e.target)) { setTimeout(hide, 0); return; }
+        hide();
+    });
+
+    // 滚动页面时也收起，避免跟着输入框悬在内容上
+    window.addEventListener('scroll', hide, { passive: true });
+});

@@ -151,19 +151,21 @@ async function handleApiRequest(url) {
                 if (videoDetail.vod_play_url) {
                     // 分割不同播放源
                     const playSources = videoDetail.vod_play_url.split('$$$');
-                    
-                    // 提取第一个播放源的集数（通常为主要源）
-                    if (playSources.length > 0) {
-                        const mainSource = playSources[0];
-                        const episodeList = mainSource.split('#');
-                        
-                        // 从每个集数中提取URL
-                        episodes = episodeList.map(ep => {
-                            const parts = ep.split('$');
-                            // 返回URL部分(通常是第二部分，如果有的话)
-                            return parts.length > 1 ? parts[1] : '';
-                        }).filter(url => url && (url.startsWith('http://') || url.startsWith('https://')));
+
+                    // ⚠️ 不能无脑取第一组：有的源（如虎牙资源 hyyun$$$hym3u8）第一组是
+                    // 网页播放页 https://xxx/play/abc，播放器打不开；第二组才是 /index.m3u8。
+                    // 优先选含 .m3u8 的那一组。
+                    let mainSource = null;
+                    for (let i = 0; i < playSources.length; i++) {
+                        if (/\.m3u8/i.test(playSources[i])) { mainSource = playSources[i]; break; }
                     }
+                    if (!mainSource) mainSource = playSources[0] || '';
+
+                    const episodeList = mainSource.split('#');
+                    episodes = episodeList.map(ep => {
+                        const parts = ep.split('$');
+                        return parts.length > 1 ? parts[1] : '';
+                    }).filter(url => url && (url.startsWith('http://') || url.startsWith('https://')));
                 }
                 
                 // 如果没有找到播放地址，尝试使用正则表达式查找m3u8链接
@@ -585,7 +587,7 @@ async function handleMultipleCustomSearch(searchQuery, customApiUrls) {
         //                  调用方读 resp.ok 直接 TypeError → 死锁）
         //   /api/session、/api/logout —— 会话复核 / 登出
         //   /api/sources —— 服务端拉取的订阅源清单
-        const SERVER_ROUTES = ['/api/login', '/api/session', '/api/logout', '/api/sources'];
+        const SERVER_ROUTES = ['/api/login', '/api/session', '/api/logout', '/api/sources', '/api/douban'];
         if (requestUrl.pathname.startsWith('/api/') &&
             SERVER_ROUTES.indexOf(requestUrl.pathname) === -1) {
             if (window.isPasswordProtected && window.isPasswordVerified) {

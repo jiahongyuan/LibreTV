@@ -409,3 +409,76 @@ input:checked + .slider:before {
 #username {
     display: none !important;
 }
+
+/* ===== 详情页改版：播放器在左，选集在右 ===== */
+.watch-layout {
+    display: flex;
+    gap: 16px;
+    align-items: flex-start;
+}
+
+.watch-main {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.watch-side {
+    flex: 0 0 320px;
+    width: 320px;
+    background: #111;
+    border: 1px solid #24272d;
+    border-radius: 12px;
+    padding: 10px 10px 12px;
+    position: sticky;
+    top: 12px;
+}
+
+.watch-side .side-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0 2px 8px;
+    color: #e8eaed;
+    font-size: 15px;
+    font-weight: 600;
+}
+
+.watch-side .side-count {
+    color: #8b9098;
+    font-size: 12.5px;
+    font-weight: 400;
+}
+
+.watch-side .episode-grid {
+    max-height: calc(100vh - 190px);
+    overflow-y: auto;
+    padding-right: 2px;
+}
+
+.watch-side .episode-btn {
+    padding: 9px 0 !important;
+    font-size: 13.5px;
+    line-height: 1.1;
+}
+
+/* 窄屏：恢复上下布局，选集放到播放器下面 */
+@media (max-width: 900px) {
+    .watch-layout {
+        flex-direction: column;
+    }
+
+    .watch-side {
+        width: 100%;
+        flex-basis: auto;
+        position: static;
+        margin-top: 4px;
+    }
+
+    .watch-side .episode-grid {
+        max-height: 40vh;
+    }
+
+    .watch-side .episode-grid #episodesList {
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+    }
+}
